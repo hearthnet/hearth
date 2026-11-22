@@ -29,6 +29,10 @@ export function sponsorArgs({ node, cookieFile, key, port, publicURL, market, st
     "--sell-storage", "--storage-rate", `${market}=${storageRate}`, "--storage-file", storageFile, "--storage-budget", String(storageBudget), "--pay-to", payTo];
 }
 
+/** Whether any lattice-sponsor answers `GET /terms` on loopback `port`. */
+export const sponsorAnswers = (port, fetchImpl = (...a) => fetch(...a)) =>
+  fetchImpl(`http://127.0.0.1:${port}/terms`, { signal: AbortSignal.timeout(2000) }).then((r) => r.ok, () => false);
+
 /**
  * The sponsor's storage as its `GET /terms` reports it on loopback `port`:
  * `{ budget, stored, held }` in bytes (`held`: uploads not yet pinned), or

@@ -114,7 +114,8 @@ export function judge({ sdk, height, versions, orders, renewals = [], genesis = 
  *          its time, a path that is not one root CID, a value that is not
  *          `bytes <n>`, or paid for fewer bytes than it names
  *   full   the offer's earlier owed orders already fill its capacity
- *   owed   kept for good: a storage sponsor never unpins
+ *   owed   kept until the host takes it down (`hearth unpin`); a storage
+ *          sponsor never unpins by itself
  *
  * A root ordered again at the same offer counts its bytes once.
  * Returns `Map(order key → verdict)`.

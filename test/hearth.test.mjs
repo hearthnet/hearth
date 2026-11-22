@@ -14,7 +14,7 @@ import { hostVouches, standing } from "../client/vouch.mjs";
 import { formatOffer, offerText } from "../client/records.mjs";
 import { DEFAULT_MARKET, DEFAULT_TERMS, currentOffer, ensureKey, fundingMessage, fundingStep, growthLine, liveOffers, offerFromFlags, parsePrice, parseSize, periodBlocks, sellerChains,
   serviceUnits, worstGrowth } from "../host/hearth.mjs";
-import { report } from "../host/status.mjs";
+import { earnings, report } from "../host/status.mjs";
 
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), "../bin/hearth.mjs");
@@ -68,6 +68,9 @@ test("the seller's first writes are funded from the sponsor key's block rewards,
   const waiting = fundingStep({ ...at, seller: 0n, sponsor: 2n, canMove: true }).wait;
   assert.match(waiting, /waiting for block rewards\. This seller's blocks pay the sponsor's key \(it holds 2\), and the seller moves 4 from it once it holds 5\./);
   assert.match(waiting, new RegExp(`Not to wait, send 3 coin on Nexus/testnet/lodger to ${HOST}, or earn it with this machine: hearth earn`));
+  assert.match(fundingStep({ ...at, seller: 0n, sponsor: 5000n, canMove: true, otherSponsor: "8650" }).wait,
+    /^a lattice-sponsor already answers on port 8650 and may sign with the sponsor's key, so the seller moves nothing from it: stop that sponsor, or send 3 coin/,
+    "a sponsor on the port may sign with the same key: nothing moved");
   const remote = fundingStep({ ...at, seller: 0n, sponsor: 5000n, canMove: false }).wait;
   assert.match(remote, /^Send at least 3 coin .* hearth sweep moves them here while no lattice-sponsor signs with it\.$/, "a sponsor signs with the key already, or --node: never moved here");
 });
@@ -76,15 +79,28 @@ test("a pass reports both balances, what buyers paid and what is owed, and stora
   const o = (created, paid, path) => ({ key: `order/${path}`, created, paid, path });
   const lines = report({ market: "Nexus/testnet/lodger", height: 100n, seller: { address: "S", balance: 297n }, sponsor: { address: "P", balance: 52000n },
     mine: [o(10n, 100n, "Nexus/testnet/a"), o(95n, 200n, "Nexus/testnet/b")], renewals: [o(50n, 100n, "Nexus/testnet/a")], counts: { owed: 1, pending: 1 },
-    until: new Map([["Nexus/testnet/a", 3000n]]), storage: { budget: 256 * 2 ** 20, stored: 12 * 2 ** 20, held: 2 ** 20 } });
+    until: new Map([["Nexus/testnet/a", 3000n]]), earned: 200n, settling: 200n, storage: { budget: 256 * 2 ** 20, stored: 12 * 2 ** 20, held: 2 ** 20 } });
   assert.deepEqual(lines, [
     "market Nexus/testnet/lodger at block 100: the seller's key S holds 297; the sponsor's key P holds 52000 (its block rewards)",
-    '2 orders {"owed":1,"pending":1} and 1 renewals: earned 200 coin, 200 more settling',
+    '2 orders {"owed":1,"pending":1} and 1 renewals: earned 200 coin from buyers, 200 more settling',
     "owes hosting to Nexus/testnet/a (to market block 3000)",
     "storage pinned by the sponsor: 12.0 MiB of its 256.0 MiB budget, 1.0 MiB held for uploads being paid, 243.0 MiB left",
   ]);
   assert.deepEqual(report({ market: "M", height: 1n, seller: { address: "S", balance: 0n }, sponsor: { address: "P", balance: 0n }, mine: [], renewals: [], counts: {},
-    until: new Map() }).slice(2), ["owes hosting to no chain now", "storage: no lattice-sponsor reporting it on the sponsor port (not running yet, or older than its storage report)"]);
+    until: new Map(), earned: 0n, settling: 0n }).slice(2), ["owes hosting to no chain now", "storage: no lattice-sponsor reporting it on the sponsor port (not running yet, or older than its storage report)"]);
+});
+
+test("earned counts only other buyers' payments for hosting owed: not void orders, the seller's own, or renewals after a close", () => {
+  const B = "buyer", A = "Nexus/testnet/a", V = "Nexus/testnet/v", S = "Nexus/testnet/s", N = "Nexus/testnet/n";
+  const ord = (key, created, paid, path, buyer = B) => ({ key, host: HOST, id: "o", created, paid, path, buyer });
+  const ren = (created, paid, path, payer = B) => ({ key: `r${created}`, host: HOST, id: "o", created, paid, path, payer });
+  // On sale from block 10, closed at block 200 (in force from 210).
+  const versions = new Map([[`${HOST}/o`, [offerAt({ created: 10n, until: 5000n }), offerAt({ created: 200n, until: 200n })]]]);
+  const mine = [ord("a", 30n, 100n, A), ord("v", 40n, 300n, V), ord("s", 50n, 400n, S, HOST), ord("n", 295n, 500n, N)];
+  const verdicts = new Map([["a", { kind: "owed" }], ["v", { kind: "void" }], ["s", { kind: "owed" }], ["n", { kind: "pending" }]]);
+  const renewals = [ren(100n, 20n, A), ren(250n, 50n, A), ren(120n, 70n, A, HOST), ren(130n, 9n, V), ren(296n, 1n, A)];
+  assert.deepEqual(earnings({ m: { height: 300n, versions }, self: HOST, mine, renewals, verdicts }), { earned: 120n, settling: 501n },
+    "a's order and its renewal before the close; settling: n's order and the newest renewal");
 });
 
 test("the seller's key is made once, mode 0600, as `lattice key generate` writes it", () => {
@@ -414,9 +430,13 @@ test("every verb takes --help", async () => {
 
 test("a bad flag is refused before `hearth sell` writes anything", async () => {
   const node = await freshNode();
+  const badStorage = join(temp(), "storage.json"), badJSON = join(temp(), "storage.json");
+  writeFileSync(badStorage, JSON.stringify({ id: "files", sponsor: "http://host.example", bytesPerCoin: 10240, capacity: 1000 }));
+  writeFileSync(badJSON, "{ not json");
   try {
     for (const bad of [["--price", "100/dya"], ["--price", "100/day", "--storage-budget", "lots"], ["--price", "100/day", "--sponsor-url", "http://host.example"],
-      ["--price", "100/day", "--interval", "0"], ["--price", "100/day", "--burn", "x"], ["--price", "100/day", "--storage-rate", "1.5"], ["--offer", "/nonexistent/offer.json"]]) {
+      ["--price", "100/day", "--interval", "0"], ["--price", "100/day", "--burn", "x"], ["--price", "100/day", "--storage-rate", "1.5"], ["--offer", "/nonexistent/offer.json"],
+      ["--parent", "testnet/app"], ["--parent", "Nexus//x"], ["--storage-offer", badStorage], ["--storage-offer", badJSON]]) {
       const { code, out } = await hearth(["sell", ...bad, "--root", node.root, "--once", "--lattice", node.lattice, "--sponsor-bin", node.sponsor]);
       assert.equal(code, 2, `${bad.join(" ")}: ${out}`);
       assert.doesNotMatch(out, /made the seller's key/, bad.join(" "));
@@ -502,4 +522,45 @@ test("`hearth sell` alone sells at 10000 coin a day, and its first run says what
     const both = await hearth(["sell", "--price", "1/day", "--offer", file, "--root", node.root, "--once"]);
     assert.match(both.out, /not both/);
   } finally { node.close(); }
+});
+
+test("`hearth sell --node` checks the node is reachable before it writes a key", async () => {
+  const dir = temp(), token = join(dir, "token");
+  writeFileSync(token, "t\n");
+  const { code, out } = await hearth(["sell", "--node", "http://127.0.0.1:9", "--token-file", token, "--key", join(dir, "seller.json"), "--once"]);
+  assert.equal(code, 2, out);
+  assert.match(out, /cannot reach the node at http:\/\/127\.0\.0\.1:9/);
+  assert.equal(existsSync(join(dir, "seller.json")), false, "no key made");
+});
+
+test("`hearth unpin` beside a node that is not running says to start it", async () => {
+  const root = temp();
+  writeFileSync(join(root, "lattice.json"), "{}");
+  const { code, out } = await hearth(["unpin", "bafyreigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi", "--root", root]);
+  assert.equal(code, 2, out);
+  assert.match(out, new RegExp(`the Lattice node at ${root} is not running \\(no chains/Nexus/\\.cookie\\): start it`));
+  assert.doesNotMatch(out, /ENOENT/);
+});
+
+test("`hearth status` never waits: an unsynced market is reported, and a node that does not answer times out", async () => {
+  const node = await freshNode({ chains: { [DEFAULT_MARKET]: { phase: "active", height: "5", bestHeaderHeight: "10" } } });
+  try {
+    for (const k of ["seller", "sponsor"]) ensureKey(sdk, join(node.root, `hearth/${k}.json`), keyFileJSON);
+    const { code, out } = await hearth(["status", "--root", node.root, "--lattice", node.lattice]);
+    assert.equal(code, 0, out);
+    assert.equal(out.trim(), "market not synced (height 5 of 10): run hearth status again once it is");
+  } finally { node.close(); }
+  // A node that takes the connection and never answers.
+  const silent = createServer(() => {});
+  await new Promise((ok) => silent.listen(0, "127.0.0.1", ok));
+  try {
+    const root = temp(), token = join(root, "token");
+    writeFileSync(token, "t\n");
+    for (const k of ["seller", "sponsor"]) ensureKey(sdk, join(root, `hearth/${k}.json`), keyFileJSON);
+    const began = Date.now();
+    const { code, out } = await hearth(["status", "--node", `http://127.0.0.1:${silent.address().port}`, "--token-file", token, "--key", join(root, "hearth/seller.json")]);
+    assert.equal(code, 2, out);
+    assert.match(out, /no answer from the node within 15 s/);
+    assert.ok(Date.now() - began < 30_000);
+  } finally { silent.closeAllConnections(); silent.close(); }
 });

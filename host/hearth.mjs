@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { reader } from "../client/market.mjs";
-import { burnAddress, formatHostURL, isHTTPS, parentOf, parseHostURL, parseOffer, pathFromNexus } from "../client/records.mjs";
+import { burnAddress, formatHostURL, formatStorageOffer, isHTTPS, isPath, offerText, parentOf, parseHostURL, parseOffer, parseStorageOffer, pathFromNexus } from "../client/records.mjs";
 import { submit } from "../client/tx.mjs";
 
 export const DEFAULT_MARKET = "Nexus/testnet/lodger-3129cc";
@@ -105,13 +105,20 @@ export function fundingMessage({ address, need, interval }) {
  * `{ ready: true }` once it holds them; else, when it may (`canMove`: no
  * lattice-sponsor signs with the sponsor's key yet), `{ move }`, the coin
  * to move from the sponsor key's block rewards (enough for a close too:
- * `4 * fee`); else `{ wait }`, what to tell the operator.
+ * `4 * fee`), once it holds that and the move's own fee; else `{ wait }`,
+ * what to tell the operator. `otherSponsor`: the port where a
+ * lattice-sponsor already answers, which might sign with the same key, so
+ * nothing is moved.
  */
-export function fundingStep({ fee, seller, sponsor, canMove, chain, address, interval }) {
+export function fundingStep({ fee, seller, sponsor, canMove, otherSponsor, chain, address, interval }) {
   if (seller >= 3n * fee) return { ready: true };
   const move = 4n * fee - seller;
-  if (canMove && sponsor >= move + fee) return { move };
   const send = `send ${3n * fee - seller} coin on ${chain} to ${address}, or earn it with this machine: hearth earn`;
+  if (canMove && otherSponsor !== undefined) {
+    return { wait: `a lattice-sponsor already answers on port ${otherSponsor} and may sign with the sponsor's key, so the seller moves nothing from it: `
+      + `stop that sponsor, or ${send}. Checking again every ${interval} s.` };
+  }
+  if (canMove && sponsor >= move + fee) return { move };
   return { wait: canMove
     ? `the seller's key holds ${seller} of the ${3n * fee} market coin its first writes cost: waiting for block rewards. `
       + `This seller's blocks pay the sponsor's key (it holds ${sponsor}), and the seller moves ${move} from it once it holds ${move + fee}. `
@@ -159,6 +166,20 @@ export function growthLine(terms) {
 }
 
 /**
+ * The storage offer a `--storage-offer` file makes at market `height`, as
+ * the seller writes it (`{ id, value }`); an error naming what is wrong.
+ */
+export function storageOfferFrom(file, height) {
+  const offer = { sponsor: file.sponsor, bytesPerCoin: BigInt(file.bytesPerCoin ?? 0), capacity: BigInt(file.capacity ?? 0),
+    until: file.until !== undefined ? BigInt(file.until) : height + BigInt(file.duration ?? 525600) };
+  const value = formatStorageOffer(offer);
+  if (!file.id || !parseStorageOffer(offerText(height, value))) {
+    throw new Error("the storage offer file does not make a valid storage offer (it needs an id, an https sponsor, bytesPerCoin and capacity above 0)");
+  }
+  return { id: file.id, value };
+}
+
+/**
  * Every `hearth sell` flag checked, before anything is written: an error
  * naming the first bad one.
  */
@@ -170,7 +191,10 @@ export function checkSellFlags(a) {
     try { o = JSON.parse(readFileSync(a.offer, "utf8")); } catch (e) { throw new Error(`the offer file ${a.offer} is not JSON: ${e.message}`); }
     for (const k of ["capacity", "maxBlockSize", "maxStateGrowth", "minTargetBlockTime"]) if (!(Number(o[k]) > 0)) throw new Error(`the offer file ${a.offer} has no ${k}`);
   }
-  if (a.price) offerFromFlags({ price: a.price, parent: a.parent, chains: a.chains, id: a.id });
+  if (a.parent !== undefined && !(isPath(a.parent) && (a.parent === "Nexus" || a.parent.startsWith("Nexus/")))) {
+    throw new Error(`--parent is a chain path from Nexus, e.g. Nexus/testnet, not ${a.parent}`);
+  }
+  const offerId = a.price ? offerFromFlags({ price: a.price, parent: a.parent, chains: a.chains, id: a.id }).id : undefined;
   if (a["burn-chain"] && !a.burn) throw new Error("--burn-chain goes with --burn");
   if (a.burn) { parseAmount(a.burn, "--burn"); burnChain(a["burn-chain"] ?? a.market, a.market); }
   if (a.fee !== undefined) parseAmount(a.fee, "--fee");
@@ -180,7 +204,13 @@ export function checkSellFlags(a) {
   if (a["storage-budget"] !== undefined) parseSize(a["storage-budget"], "--storage-budget");
   if (a["sponsor-url"] !== undefined && !isHTTPS(a["sponsor-url"])) throw new Error(`--sponsor-url is the sponsor's public https URL, not ${a["sponsor-url"]}`);
   if (a.url !== undefined && !parseHostURL(formatHostURL(a.url, a.proof))) throw new Error(`--url is an https URL (and --proof one on its hostname), not ${a.url}`);
-  if (a["storage-offer"] && !existsSync(a["storage-offer"])) throw new Error(`no storage offer file at ${a["storage-offer"]}`);
+  if (a["storage-offer"]) {
+    if (!existsSync(a["storage-offer"])) throw new Error(`no storage offer file at ${a["storage-offer"]}`);
+    let file;
+    try { file = JSON.parse(readFileSync(a["storage-offer"], "utf8")); } catch (e) { throw new Error(`the storage offer file ${a["storage-offer"]} is not JSON: ${e.message}`); }
+    try { storageOfferFrom(file, 0n); } catch (e) { throw new Error(`${a["storage-offer"]}: ${e.message}`); }
+    if (file.id === (offerId ?? a.id)) throw new Error("the storage offer needs an id of its own, not the hosting offer's");
+  }
 }
 
 /**

@@ -72,18 +72,25 @@ other limits.
 offer, url and storage offer: three fees). The pacer pays the sponsor's key
 the market's blocks, so beside the node the seller moves the fees of its
 first writes (four, for a close too) from the sponsor's key to its own
-before it starts lattice-sponsor, so nothing else signs with that key. Until
-that key holds them, it says it waits for block rewards, or that you may
-send the coin or earn it with `hearth earn` (below), and checks again each
-`--interval`. With `--node`, or once an offer is out, it only says what to
-send, earn or sweep.
+before it starts lattice-sponsor, so nothing else signs with that key. It
+waits until that key holds five fees (the four it moves and the move's own
+fee); until then it says it waits for block rewards, or that you may send
+the coin or earn it with `hearth earn` (below), and checks again each
+`--interval`. It moves nothing if any lattice-sponsor already answers on
+`--sponsor-port` (it could sign with the same key), and says so. With
+`--node`, or once an offer is out, it only says what to send, earn or
+sweep.
 
 **Status.** Each pass prints both keys' balances on the market, the
-seller's orders (by verdict) and renewals, the coin they paid (settled, and
-still settling), the chains it owes hosting to and until which market
-block, and the storage its sponsor has pinned against its budget (its
-`GET /terms`).
-`hearth status` prints the same once.
+seller's orders (by verdict) and renewals, the coin other buyers paid for
+hosting it owes or owed (`earned`: settled orders judged owed, and settled
+renewals of those chains that bought time; void, full and taken orders and
+the seller's own count in neither; `settling`: not settled yet), the
+chains it owes hosting to and until which market block, and the storage its
+sponsor has pinned against its budget (its `GET /terms`; not read with
+`--node`, whose sponsor runs beside the remote node). `hearth status`
+prints the same once, with a deadline on every read: it never waits for a
+sync, and says `market not synced (height X of Y)` instead.
 
 **Blocks.** The seller makes the blocks of the market and of every chain it
 hosts for its orders (`host/pace.mjs`), always: there is no flag. A chain is

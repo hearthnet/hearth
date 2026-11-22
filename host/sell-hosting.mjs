@@ -94,14 +94,14 @@ import { parseArgs } from "node:util";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const sdk = await import(join(HERE, "../vendor/lattice-sdk.js"));
 const { reader } = await import(join(HERE, "../client/market.mjs"));
-const { parseOffer, formatOffer, offerText, offerKey, urlKey, specJSON, parentOf, parseStorageOffer, formatStorageOffer, formatHostURL, parseHostURL, newestOffers, isHTTPS, isClosed } = await import(join(HERE, "../client/records.mjs"));
+const { parseOffer, formatOffer, offerText, offerKey, urlKey, specJSON, parentOf, formatHostURL, parseHostURL, newestOffers, isHTTPS, isClosed } = await import(join(HERE, "../client/records.mjs"));
 const { offerActions, recordsBody, submit, keyFileJSON } = await import(join(HERE, "../client/tx.mjs"));
 const { periodBlocks, durationBlocks, ordered, sellerChains, liveOffers, currentOffer, fundingMessage, fundingStep, burn, burnChain, parseAmount, rpcPort, nodeSecret, authedFetch,
-  nodeVersion, chainSync, ensureKey, operatorRPC, sellerFiles, startsReopened, parseSize, growthLine, DEFAULT_STORAGE_RATE, DEFAULT_STORAGE_BUDGET } = await import(join(HERE, "hearth.mjs"));
-const { judgeOwn, report } = await import(join(HERE, "status.mjs"));
+  nodeVersion, chainSync, ensureKey, operatorRPC, sellerFiles, startsReopened, parseSize, growthLine, storageOfferFrom, DEFAULT_STORAGE_RATE, DEFAULT_STORAGE_BUDGET } = await import(join(HERE, "hearth.mjs"));
+const { judgeOwn, report, REMOTE_STORAGE } = await import(join(HERE, "status.mjs"));
 const { closedAt, closingDone } = await import(join(HERE, "stop.mjs"));
 const { pacer } = await import(join(HERE, "pace.mjs"));
-const { sponsorArgs, sponsorBinary, sponsorStorage, supervise } = await import(join(HERE, "sponsor.mjs"));
+const { sponsorAnswers, sponsorArgs, sponsorBinary, sponsorStorage, supervise } = await import(join(HERE, "sponsor.mjs"));
 
 const { values: args } = parseArgs({
   options: {
@@ -285,10 +285,7 @@ async function ensureOffer(m, newest) {
     return true;
   }
   if (storageFile && !m.versions.has(`${self}/${storageFile.id}`)) {
-    const offer = { sponsor: storageFile.sponsor, bytesPerCoin: BigInt(storageFile.bytesPerCoin), capacity: BigInt(storageFile.capacity),
-      until: storageFile.until !== undefined ? BigInt(storageFile.until) : m.height + BigInt(storageFile.duration ?? 525600) };
-    const value = formatStorageOffer(offer);
-    if (!storageFile.id || !parseStorageOffer(offerText(m.height, value))) throw new Error("the storage offer file does not make a valid storage offer");
+    const { value } = storageOfferFrom(storageFile, m.height);
     log("writing storage offer", offerKey(self, storageFile.id, m.height), await send([{ key: offerKey(self, storageFile.id, m.height), newValue: value }]));
     return true;
   }
@@ -338,7 +335,11 @@ async function fund(first) {
   const n = node();
   const [seller, sponsorAccount, info] = await Promise.all([n.account(marketPath, self), n.account(marketPath, sponsorAddress), n.api("/api/chain/info", marketPath)]);
   const fee = BigInt(args.fee ?? info.minRelayFee ?? 1);
-  const step = fundingStep({ fee, seller: seller.balance, sponsor: sponsorAccount.balance, canMove: first && !!root && !sponsor,
+  const canMove = first && !!root && !sponsor;
+  // A lattice-sponsor already on the port (started by hand, or another
+  // seller's) may sign with the sponsor's key: two signers would race.
+  const otherSponsor = canMove && await sponsorAnswers(args["sponsor-port"]) ? args["sponsor-port"] : undefined;
+  const step = fundingStep({ fee, seller: seller.balance, sponsor: sponsorAccount.balance, canMove, otherSponsor,
     chain: marketPath, address: self, interval: args.interval });
   if (step.ready) { funded = true; fundLine = undefined; return true; }
   if (!first) return false;
@@ -406,7 +407,7 @@ async function pass() {
   const { owed, counts } = judged;
   const [sellerAccount, sponsorAccount] = await Promise.all([n.account(marketPath, self), n.account(marketPath, sponsorAddress)]);
   log(report({ market: marketPath, height: m.height, seller: { address: self, balance: sellerAccount.balance }, sponsor: { address: sponsorAddress, balance: sponsorAccount.balance },
-    ...judged, storage: root ? await sponsorStorage(args["sponsor-port"]) : undefined }).join("\n  "));
+    ...judged, storage: root ? await sponsorStorage(args["sponsor-port"]) : REMOTE_STORAGE }).join("\n  "));
   if (closing) {
     // Done once every offer is closed, every order the close cannot void
     // has settled, and nothing paid is left.

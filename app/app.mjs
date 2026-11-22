@@ -221,7 +221,8 @@ addEventListener("hashchange", route);
 const PRESETS = {
   // Fits what `hearth sell --price` sells unless told otherwise (DEFAULT_TERMS in host/hearth.mjs).
   small: { label: "Small app", targetBlockTime: 30000n, maxBlockSize: 20000n, maxStateGrowth: 10000n, maxNumberOfTransactionsPerBlock: 100n },
-  busy: { label: "Busy app", targetBlockTime: 5000n, maxBlockSize: 1000000n, maxStateGrowth: 1000000n, maxNumberOfTransactionsPerBlock: 1000n },
+  // Bigger than a seller's default limits: only offers with bigger limits fit it.
+  busy: { label: "Busy app (needs a seller with bigger limits)", targetBlockTime: 5000n, maxBlockSize: 1000000n, maxStateGrowth: 1000000n, maxNumberOfTransactionsPerBlock: 1000n },
 };
 /** Coin each block pays whoever makes it: hosts make the blocks, and their sponsors spend it on visitors' write fees. */
 const BLOCK_REWARD = 100n;

@@ -51,8 +51,8 @@ import { CREATED_WINDOW } from "../client/records.mjs";
 import { DEFAULT_MARKET, DEFAULT_PRICE, WHY_SELL, DEFAULT_STORAGE_RATE, authedFetch, burn, burnChain, chainSync, checkRoot, checkSellFlags, ensureKey, findRoot,
   installedSeller, nodeSecret, nodeVersion, offerFromFlags, markClosing, markReopen, onPath, sponsorBooks, operatorRPC, parseAmount, rpcPort,
   sellerFiles, serviceUnits, sweep, waitSynced } from "../host/hearth.mjs";
-import { sponsorBinary, sponsorStorage, unpin } from "../host/sponsor.mjs";
-import { judgeOwn, report } from "../host/status.mjs";
+import { sponsorAnswers, sponsorBinary, sponsorStorage, unpin } from "../host/sponsor.mjs";
+import { REMOTE_STORAGE, judgeOwn, report } from "../host/status.mjs";
 import { isRootCID } from "../client/records.mjs";
 import { stop } from "../host/stop.mjs";
 import { pacer } from "../host/pace.mjs";
@@ -159,8 +159,7 @@ if (verb === "sweep") {
     if (pid) fail(`the seller (pid ${pid}) runs lattice-sponsor with the sponsor's key, and two signers would race for its nonces: ${pause}. `
       + "Its offers stay on sale meanwhile (hearth stop would close them). The seller funds its first writes from the sponsor's key by itself.");
     const port = a["sponsor-port"] ?? "8650";
-    const answered = await fetch(`http://127.0.0.1:${port}/terms`, { signal: AbortSignal.timeout(2000) }).then((r) => r.ok, () => false);
-    if (answered) fail(`a lattice-sponsor answers on port ${port}: stop it before sweeping its key (it signs with the same key), or give --sponsor-port`);
+    if (await sponsorAnswers(port)) fail(`a lattice-sponsor answers on port ${port}: stop it before sweeping its key (it signs with the same key), or give --sponsor-port`);
     const chain = burnChain(a.chain ?? a.market, a.market);
     await nodeVersion(node, fetchImpl);
     await waitSynced(node, chain, { fetchImpl, label: chain === a.market ? "market" : chain });
@@ -174,14 +173,22 @@ if (verb === "sweep") {
 }
 
 if (verb === "status") {
+  // A report, not a wait: every read has a deadline, and so has the whole.
+  setTimeout(() => fail("no answer from the node within 120 s: is it running, and not overloaded?"), 120_000).unref();
   try {
-    const { root, key, node, fetchImpl } = await located();
+    const { root, key, node, fetchImpl: authed } = await located();
+    const fetchImpl = (input, init = {}) => authed(input, { ...init, signal: AbortSignal.timeout(15_000) })
+      .catch((e) => { throw e.name === "TimeoutError" ? new Error(`${new URL(input).pathname}: no answer from the node within 15 s`) : e; });
     const self = sdk.accountFromPrivateKey(readKey(key)).address;
     const sponsorKey = join(dirname(key), "sponsor.json");
     if (!existsSync(sponsorKey)) fail(`no sponsor key at ${sponsorKey}: hearth sell makes it`);
     const sponsorAddress = JSON.parse(readFileSync(sponsorKey, "utf8")).address;
     await nodeVersion(node, fetchImpl);
-    await waitSynced(node, a.market, { fetchImpl, label: "market" });
+    const sync = await chainSync(node, a.market, fetchImpl, "market");
+    if (!sync.synced) {
+      console.log(sync.height === undefined && sync.best === undefined ? `market not synced: ${sync.line}` : `market not synced (height ${sync.height ?? 0} of ${sync.best ?? "?"}): run hearth status again once it is`);
+      process.exit(0);
+    }
     const n = reader(sdk, node, { fetchImpl });
     const m = await n.market(a.market);
     const { status } = (await operatorRPC(node, fetchImpl)("/config")).body;
@@ -189,7 +196,7 @@ if (verb === "status") {
     const own = await judgeOwn({ sdk, n, m, self, hosted });
     const [seller, sponsor] = await Promise.all([n.account(a.market, self), n.account(a.market, sponsorAddress)]);
     console.log(report({ market: a.market, height: m.height, seller: { address: self, balance: seller.balance }, sponsor: { address: sponsorAddress, balance: sponsor.balance },
-      ...own, storage: await sponsorStorage(a["sponsor-port"] ?? "8650") }).join("\n"));
+      ...own, storage: root ? await sponsorStorage(a["sponsor-port"] ?? "8650") : REMOTE_STORAGE }).join("\n"));
     const pid = root && runningSeller(sellerFiles({ root, key }).pid);
     if (root) console.log(pid ? `the seller runs (pid ${pid})${existsSync(sellerFiles({ root, key }).closing) ? ", closing" : ""}` : "no seller runs beside this node");
   } catch (e) { fail(e.message); }
@@ -206,7 +213,9 @@ if (verb === "unpin") {
     // The sponsor takes the node's cookie as the operator's credential.
     const root = nodeRoot();
     if (!root) fail("hearth unpin runs beside the node (--root): its sponsor takes the node's cookie");
-    const done = await unpin({ port, cid, cookie: readFileSync(join(root, "chains/Nexus/.cookie"), "utf8").trim() });
+    const cookieFile = join(root, "chains/Nexus/.cookie");
+    if (!existsSync(cookieFile)) fail(`the Lattice node at ${root} is not running (no chains/Nexus/.cookie): start it (lattice up --root ${root}) and the seller, then unpin`);
+    const done = await unpin({ port, cid, cookie: readFileSync(cookieFile, "utf8").trim() });
     console.log(`took ${done.cid} down: the sponsor refuses it from now on, and unpinned ${done.unpinned.length} Volumes (${done.unpinned.join(" ") || "none were pinned"}). `
       + "Whoever paid for it loses the rest of its time, with no refund.");
   } catch (e) { fail(e.message); }
@@ -298,6 +307,13 @@ try {
   // The node: remote with --node, else its root.
   const root = nodeRoot();
   if (root) sponsorBinary(a["sponsor-bin"]);
+  // A remote node: reachable, with the token, and new enough.
+  if (a.node) {
+    if (!existsSync(resolve(a["token-file"]))) fail(`no token file at ${resolve(a["token-file"])}`);
+    const token = readFileSync(resolve(a["token-file"]), "utf8").trim();
+    await nodeVersion(a.node, (input, init = {}) => fetch(input, { ...init, signal: AbortSignal.timeout(15_000), headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}` } }))
+      .catch((e) => { throw e.tooOld ? e : new Error(`cannot reach the node at ${a.node}: ${e.cause?.code ?? e.message}`); });
+  }
   const key = resolve(a.key ?? join(root ?? process.cwd(), "hearth/seller.json"));
   const { address, created } = ensureKey(sdk, key, keyFileJSON);
   console.log(`${created ? "made the seller's key" : "seller key"} ${key}\naddress ${address}`);

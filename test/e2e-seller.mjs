@@ -136,7 +136,7 @@ try {
   say("app1 served, fragment", fragment());
   const status = await until("hearth status after the order settled", async () => {
     const s = await hearth("status", "--root", root, "--market", MARKET, "--lattice", LATTICE, "--sponsor-port", String(ports.sponsor));
-    return / and 0 renewals: earned 80 coin\n/.test(s.out) && s;
+    return / and 0 renewals: earned 80 coin from buyers\n/.test(s.out) && s;
   }, 120);
   say("hearth status:\n" + status.out);
   assert.equal(status.code, 0, status.out);
