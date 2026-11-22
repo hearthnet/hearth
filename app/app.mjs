@@ -12,6 +12,7 @@ import { judge, judgeStorage, sameGenesis } from "../client/verdict.mjs";
 import { parseOffer, parseOrderKey, parsePayload, parseStorageOffer, parseHostURL, offerAt, isClosed, moduleCID, isAddress, SETTLE, burnAddress, pathFromNexus } from "../client/records.mjs";
 import { checkListed, checkServing, sponsorURL as askable } from "../client/service.mjs";
 import { snippet } from "./snippet.mjs";
+import { uniqueNodes, nodesNow, chooseAnchor, disagreeMessage, blocksTime, CHECKPOINT_AFTER, WALK } from "./anchor.mjs";
 import { launchAttempt } from "./launch.mjs";
 import { once } from "./once.mjs";
 import { creditedHashrate, formatRate } from "../client/mining.mjs";
@@ -940,13 +941,20 @@ async function viewOrder(view, key, current) {
   const node = parseHostURL(m.urlValues.get(o.host))?.read;
   // Reads go through this host's node (it takes the writes) and every other
   // host's you ordered from that publishes one; with two or more, a block is
-  // read only once two of them hold it. The genesis is the one probe checked
-  // against this order's payload.
-  const nodes = [...new Set([node, ...hosting.map(([x]) => parseHostURL(m.urlValues.get(x.host))?.read)].filter(Boolean))];
-  const use = { sdkURL: SDK_URL, chain: o.path, genesis: p?.genesis, nodes, sponsors: [...new Set(hosting.map(([, k]) => sponsorURL(m.terms.get(k))).filter(Boolean))], ownKeys };
+  // read only once two of them hold it. Reads are pinned to the genesis probe
+  // checked against this order's payload or, on a longer chain, to a recent
+  // block those nodes agree on (app/anchor.mjs).
+  const nodes = uniqueNodes(sdk, [node, ...hosting.map(([x]) => parseHostURL(m.urlValues.get(x.host))?.read)].filter(Boolean));
+  const anchor = p?.state === "serving" && nodes.length ? await chooseAnchor({ now: await nodesNow(nodes, o.path), chain: o.path, genesis: p.genesis }) : { genesis: p?.genesis };
+  if (!current()) return;
+  const blockTime = v.payload?.spec.targetBlockTime ?? 60_000;
+  const pinNote = anchor.checkpoint !== undefined
+    ? `Pins block ${fmt(anchor.height)}; refresh it when you redeploy, about every ${fmt(WALK)} blocks (${blocksTime(WALK, blockTime)} at this chain's block time).`
+    : `Pins the chain's genesis; once the chain is past ${fmt(CHECKPOINT_AFTER)} blocks (${blocksTime(Number(CHECKPOINT_AFTER), blockTime)} at this chain's block time), copy it again to pin a recent block.`;
+  const use = { sdkURL: SDK_URL, chain: o.path, anchor, nodes, sponsors: [...new Set(hosting.map(([, k]) => sponsorURL(m.terms.get(k))).filter(Boolean))], ownKeys };
   const snippetBlock = !rulesKnown ? `<div class="notice bad">The rule presets did not load, so this page can't tell which keys this chain lets you write. <a href="" onclick="location.reload();return false">Reload</a> to try again.</div>`
     : !node ? `<div class="notice bad">This host's read URL is not a valid https URL, so there is nothing to connect to.</div>`
-    : `<p class="muted">${SDK_TAG ? "Paste this into any web page. It" : "Test write"} writes one key and reads it back, checking what it reads against the chain's genesis. ${nodes.length > 1 ? `It reads a block only once two of your hosts' nodes hold it.` : `Only one of your hosts publishes a node, so its reads trust that one node: it could serve a made-up block. Order from a host of another operator to check it.`} ${use.sponsors.length ? "Your hosts' sponsors pay the write fees: the writer's device does a few seconds of work instead." : "None of the hosts you ordered from names a sponsor, so whoever writes needs coin on this chain to pay the fee."}</p>
+    : `<p class="muted">${SDK_TAG ? "Paste this into any web page. It" : "Test write"} writes one key and reads it back, checking what it reads against a pinned block. ${pinNote} ${nodes.length > 1 ? `It reads a block only once two of your hosts' nodes hold it.` : `Only one of your hosts publishes a node, so its reads trust that one node: it could serve a made-up block. Order from a host of another operator to check it.`} ${use.sponsors.length ? "Your hosts' sponsors pay the write fees: the writer's device does a few seconds of work instead." : "None of the hosts you ordered from names a sponsor, so whoever writes needs coin on this chain to pay the fee."}</p>
      ${SDK_TAG ? `<pre class="mono card soft" style="white-space:pre-wrap;margin:0" id="snippet">${esc(snippet(use))}</pre>` : `<p class="small muted">The code to paste appears here once a release of the SDK is tagged. Test write works now.</p>`}
      <div class="row">${SDK_TAG ? `<button class="btn small" id="copy">Copy</button>` : ""}<button class="btn small" id="tryWrite">Test write</button><span class="small" id="tryNote"></span></div>`;
   const settled = v.kind !== "pending";
@@ -986,12 +994,18 @@ async function viewOrder(view, key, current) {
     try {
       // The vendored copy the snippet's URL serves once tagged: no remote code beside your key.
       const { connect } = await import("../vendor/lattice-browser.js");
+      // What each node says just before, to name the ones that did not answer.
+      const now = use.nodes.length > 1 ? await nodesNow(use.nodes, use.chain) : [];
       note.textContent = "Writing… (paying the fee in work can take a minute)";
-      // Walked back to genesis: as many blocks as the chain has, and room to grow.
-      const db = await connect({ chain: use.chain, genesis: use.genesis, maxHeaders: Math.max(2000, Number(p.height) + 500), node: use.nodes, sponsors: use.sponsors });
-      const key = ownKeys ? `hello/${db.address}` : `hello/${Date.now()}`;
-      await db.set(key, "Test write from Hearth");
-      note.textContent = `Wrote ${key} and read back: ${await db.get(key)}`;
+      try {
+        const db = await connect({ chain: use.chain, genesis: use.anchor.genesis, checkpoint: use.anchor.checkpoint, node: use.nodes, sponsors: use.sponsors });
+        const key = ownKeys ? `hello/${db.address}` : `hello/${Date.now()}`;
+        await db.set(key, "Test write from Hearth");
+        note.textContent = `Wrote ${key} and read back: ${await db.get(key)}`;
+      } catch (e) {
+        if (e.code === "disagree" && now.length) throw new Error(disagreeMessage(now));
+        throw e;
+      }
     } catch (e) { note.style.color = "var(--bad)"; note.textContent = `The test write failed: ${e.message}`; }
   });
   $("#renew")?.addEventListener("click", async () => {

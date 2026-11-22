@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { snippet } from "../app/snippet.mjs";
 
 const genesis = "bafyreicbllerm4n3yyknvd7hbwwmwtf27qubbihgp7umj6fzf7cr32zeua";
-const use = { sdkURL: "https://cdn.example/sdk@1.2.3/browser.js", chain: "Nexus/testnet/rsvp", genesis, nodes: ["https://host.example", "https://other.example"], sponsors: ["https://a.example/sponsor", "https://b.example/sponsor"] };
+const use = { sdkURL: "https://cdn.example/sdk@1.2.3/browser.js", chain: "Nexus/testnet/rsvp", anchor: { genesis }, nodes: ["https://host.example", "https://other.example"], sponsors: ["https://a.example/sponsor", "https://b.example/sponsor"] };
 
 test("the snippet is a whole page: it loads the pinned SDK, connects to this chain, writes once and reads it back", () => {
   const page = snippet(use);
@@ -12,7 +12,8 @@ test("the snippet is a whole page: it loads the pinned SDK, connects to this cha
   assert.ok(page.includes('import { connect } from "https://cdn.example/sdk@1.2.3/browser.js";'));
   assert.ok(page.includes('chain: "Nexus/testnet/rsvp"') && page.includes(`genesis: "${genesis}"`));
   assert.ok(page.includes('node: ["https://host.example","https://other.example"]'));
-  assert.ok(!page.includes("minAgree"), "two or more nodes: the SDK's default of two must agree");
+  assert.ok(!/^\s*minAgree/m.test(page), "two or more nodes: the SDK's default of two must agree");
+  assert.ok(page.includes("// minAgree: 1,"), "the trade-off is offered, commented out");
   assert.ok(page.includes('sponsors: ["https://a.example/sponsor","https://b.example/sponsor"]'));
   assert.equal(page.match(/db\.set\(/g).length, 1);
   assert.equal(page.match(/db\.get\(/g).length, 1);
@@ -24,6 +25,13 @@ test("with one host's node, the snippet says its reads trust that node", () => {
   assert.ok(page.includes('node: ["https://host.example"]'));
   assert.ok(page.includes("Reads trust this one node"));
   assert.ok(!snippet(use).includes("Reads trust this one node"));
+});
+
+test("a longer chain's snippet pins a recent block, not genesis, and says to refresh it", () => {
+  const page = snippet({ ...use, anchor: { checkpoint: "bafyreicheckpoint", height: 4321n } });
+  assert.ok(page.includes('checkpoint: "bafyreicheckpoint"') && page.includes("block 4321"));
+  assert.ok(!page.includes("genesis:"));
+  assert.ok(page.includes("Refresh it when you redeploy"));
 });
 
 test("under the own-keys rules the snippet writes a key ending in the writer's address", () => {
