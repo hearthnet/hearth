@@ -450,6 +450,20 @@ LATTICE=<lattice-node>/.build/debug/lattice SPONSOR=<lattice-sponsor>/.build/deb
   node test/e2e-seller.mjs                                             # hearth sell paces and sponsors; hearth stop
 ```
 
+`vendor/` holds two builds of lattice-sdk at commit `258dc92`.
+From a clean clone, run `npm ci && npx tsc -b`. Then build each file with esbuild:
+
+```
+# vendor/lattice-sdk.js: Node and the app, from the clone's root
+echo "export * from './packages/core/dist/index.js'; export * from './packages/client/dist/index.js'; export * from './packages/relay/dist/index.js'; export * from './packages/volumes/dist/index.js';" \
+  | npx esbuild --bundle --format=esm --target=es2022 --platform=node --outfile=lattice-sdk.js
+# vendor/lattice-browser.js: connect, from packages/sdk
+cd packages/sdk && npx esbuild dist/index.js --bundle --format=esm --target=es2022 --outfile=lattice-browser.js \
+  "--banner:js=/*! Lattice SDK, browser build | MIT License | Copyright (c) 2026 The Lattice Authors | Includes @noble/hashes and @noble/ed25519, MIT License, Copyright (c) Paul Miller */"
+```
+
+Two builds of a commit are byte-identical.
+
 `test/devnet.mjs` runs a local market to work on the page against. The
 devnet scripts (`test/devnet.mjs`, `test/e2e.mjs`, `test/e2e-commit.mjs`)
 run the seller with lattice-sponsor from `PATH`, or from `SPONSOR=<path>`

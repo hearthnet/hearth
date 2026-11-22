@@ -1061,10 +1061,10 @@ function array(value, name) {
   return value;
 }
 function unsigned2(value, name, maximum = 0xffffffffffffffffn) {
-  const decoded = integer2(value, name);
-  if (decoded < 0n || decoded > maximum)
+  const decoded2 = integer2(value, name);
+  if (decoded2 < 0n || decoded2 > maximum)
     throw new TypeError(`${name} is out of range`);
-  return decoded;
+  return decoded2;
 }
 function reference(value, name) {
   return string(record(value, name).rawCID, `${name}.rawCID`);
@@ -2093,11 +2093,11 @@ function verifyChildBlockProof(proof, childBytes, chainPath) {
     try {
       if (childrenData === void 0)
         return fail("malformedEvidence");
-      const decoded = decodeDagCbor(childrenData);
-      if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded) || decoded instanceof Uint8Array) {
+      const decoded2 = decodeDagCbor(childrenData);
+      if (decoded2 === null || typeof decoded2 !== "object" || Array.isArray(decoded2) || decoded2 instanceof Uint8Array) {
         return fail("malformedEvidence");
       }
-      children = decoded;
+      children = decoded2;
     } catch {
       return fail("malformedEvidence");
     }
@@ -2422,10 +2422,10 @@ function parseBlockChildren(value) {
     };
   });
 }
-function transactionWeight(size, growth, weight) {
+function transactionWeight(size2, growth, weight) {
   if (!weight)
-    return Math.max(1, size);
-  let result = Math.max(1, size + weight.transactionAllowance);
+    return Math.max(1, size2);
+  let result = Math.max(1, size2 + weight.transactionAllowance);
   if (weight.blockRoom <= 0)
     return result;
   if (growth > 0) {
@@ -2541,14 +2541,14 @@ async function boundedText(response, maximumBytes, signal) {
     return "";
   const reader = response.body.getReader();
   const chunks = [];
-  let size = 0;
+  let size2 = 0;
   try {
     while (true) {
       const { done, value } = await abortable(reader.read(), signal);
       if (done)
         break;
-      size += value.byteLength;
-      if (size > maximumBytes) {
+      size2 += value.byteLength;
+      if (size2 > maximumBytes) {
         throw new NodeError(response.status, "response too large");
       }
       chunks.push(value);
@@ -2560,7 +2560,7 @@ async function boundedText(response, maximumBytes, signal) {
   } finally {
     reader.releaseLock();
   }
-  const bytes = new Uint8Array(size);
+  const bytes = new Uint8Array(size2);
   let offset = 0;
   for (const chunk of chunks) {
     bytes.set(chunk, offset);
@@ -3342,19 +3342,19 @@ async function boundedText2(response, maximumBytes) {
     return "";
   const reader = response.body.getReader();
   const chunks = [];
-  let size = 0;
+  let size2 = 0;
   while (true) {
     const { done, value } = await reader.read();
     if (done)
       break;
-    size += value.byteLength;
-    if (size > maximumBytes) {
+    size2 += value.byteLength;
+    if (size2 > maximumBytes) {
       await reader.cancel();
       return void 0;
     }
     chunks.push(value);
   }
-  const bytes = new Uint8Array(size);
+  const bytes = new Uint8Array(size2);
   let offset = 0;
   for (const chunk of chunks) {
     bytes.set(chunk, offset);
@@ -3442,18 +3442,18 @@ var SponsorClient = class {
     if (text === void 0)
       throw new SponsorError(response.status, "response too large");
     const wait = response.ok ? void 0 : retryAfter(response.headers.get("retry-after"));
-    let decoded;
+    let decoded2;
     try {
-      decoded = JSON.parse(text);
+      decoded2 = JSON.parse(text);
     } catch {
       throw new SponsorError(response.status, response.ok ? "invalid JSON response" : void 0, wait);
     }
     if (!response.ok)
-      throw new SponsorError(response.status, errorMessage(decoded), wait);
-    if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded)) {
+      throw new SponsorError(response.status, errorMessage(decoded2), wait);
+    if (decoded2 === null || typeof decoded2 !== "object" || Array.isArray(decoded2)) {
       throw new SponsorError(response.status, "invalid sponsor response");
     }
-    return decoded;
+    return decoded2;
   }
   /**
    * A nonce range to grind. Without `store`, its shares buy `chain`'s fee
@@ -3672,18 +3672,18 @@ var HTTPTransactionSubmitter = class {
     const text = await boundedText2(response, this.#maximumResponseBytes);
     if (text === void 0)
       throw new SubmissionError(response.status, "response too large");
-    let decoded;
+    let decoded2;
     try {
-      decoded = JSON.parse(text);
+      decoded2 = JSON.parse(text);
     } catch {
       throw new SubmissionError(response.status, response.ok ? "invalid JSON response" : void 0);
     }
     if (!response.ok)
-      throw new SubmissionError(response.status, errorMessage(decoded));
-    if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded)) {
+      throw new SubmissionError(response.status, errorMessage(decoded2));
+    if (decoded2 === null || typeof decoded2 !== "object" || Array.isArray(decoded2)) {
       throw new SubmissionError(response.status, "invalid submission response");
     }
-    const body = decoded;
+    const body = decoded2;
     if (typeof body.transactionCID !== "string") {
       throw new SubmissionError(response.status, "submission response omitted transactionCID");
     }
@@ -4353,6 +4353,10 @@ function contentBaseURL(input) {
     url.pathname += "/";
   return url;
 }
+function archiveBytes(limits) {
+  const overhead = 2 + limits.maximumEntries * (2 + MAXIMUM_VOLUME_CID_BYTES + 4);
+  return Math.min(MAXIMUM_VOLUME_ARCHIVE_BYTES, overhead + limits.maximumBytes);
+}
 async function boundedBytes(response, maximumBytes) {
   const declared = response.headers.get("content-length");
   if (declared !== null) {
@@ -4365,19 +4369,19 @@ async function boundedBytes(response, maximumBytes) {
     return new Uint8Array();
   const reader = response.body.getReader();
   const chunks = [];
-  let size = 0;
+  let size2 = 0;
   while (true) {
     const { done, value } = await reader.read();
     if (done)
       break;
-    size += value.byteLength;
-    if (size > maximumBytes) {
+    size2 += value.byteLength;
+    if (size2 > maximumBytes) {
       await reader.cancel();
       throw new VolumeTransportError("Volume response is too large", response.status);
     }
     chunks.push(value);
   }
-  const bytes = new Uint8Array(size);
+  const bytes = new Uint8Array(size2);
   let offset = 0;
   for (const chunk of chunks) {
     bytes.set(chunk, offset);
@@ -4427,7 +4431,7 @@ var HTTPVolumeTransport = class {
     if (mediaType !== VOLUME_ARCHIVE_MEDIA_TYPE) {
       throw new VolumeTransportError(`content gateway returned ${mediaType ?? "no content type"}`, response.status);
     }
-    const archive = await boundedBytes(response, MAXIMUM_VOLUME_ARCHIVE_BYTES);
+    const archive = await boundedBytes(response, archiveBytes(this.#limits));
     return decodeVolumeArchive(rootCID, archive, this.#limits);
   }
   /**
@@ -4538,6 +4542,76 @@ function verifyUint64SparseProof(proof) {
       return false;
     cid = next;
   }
+}
+
+// dist/file.js
+var CHUNK_BYTES = 1 << 20;
+var MAX_TYPE_LENGTH = 255;
+var CHUNKS_IN_FLIGHT = 4;
+var FILE_VOLUME_LIMITS = {
+  maximumEntries: 1,
+  maximumBytes: CHUNK_BYTES + 4096
+};
+function exactly(value, keys) {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return void 0;
+  if (value instanceof Uint8Array)
+    return void 0;
+  const present = Object.keys(value).sort();
+  return present.length === keys.length && [...keys].sort().every((key, i) => key === present[i]) ? value : void 0;
+}
+async function readFile(volumes, root, maxBytes, signal) {
+  const fail = (why) => {
+    throw new Error(`${root} is not a file: ${why}`);
+  };
+  const value = decodeDagCbor((await volumes.get(root, signal)).rootBytes());
+  const fields = exactly(value, ["type", "size", "bytes"]) ?? exactly(value, ["type", "size", "chunks"]);
+  if (fields === void 0)
+    return fail("its root is not { type, size, bytes | chunks }");
+  const { type, size: size2 } = fields;
+  if (typeof type !== "string" || type.length > MAX_TYPE_LENGTH)
+    return fail("bad type");
+  if (typeof size2 !== "bigint" || size2 < 0n)
+    return fail("bad size");
+  if (size2 > BigInt(maxBytes)) {
+    throw new RangeError(`${root} holds ${size2} bytes, more than maxBytes ${maxBytes}`);
+  }
+  const length = Number(size2);
+  if (fields.bytes !== void 0) {
+    const { bytes: bytes2 } = fields;
+    if (!(bytes2 instanceof Uint8Array) || bytes2.length !== length || length > CHUNK_BYTES) {
+      return fail("a one-block file is its size, at most 1 MiB");
+    }
+    return new Blob([new Uint8Array(bytes2)], { type });
+  }
+  const { chunks } = fields;
+  if (!Array.isArray(chunks) || chunks.length !== Math.ceil(length / CHUNK_BYTES) || !chunks.every((cid) => typeof cid === "string" && isStandardCID(cid))) {
+    return fail("its chunks do not cover its size");
+  }
+  const bytes = new Uint8Array(length);
+  const stop = new AbortController();
+  const chunkSignal = signal === void 0 ? stop.signal : AbortSignal.any([signal, stop.signal]);
+  const read = async (index) => {
+    const cid = chunks[index];
+    const volume = await volumes.get(cid, chunkSignal);
+    const chunk = exactly(decodeDagCbor(volume.rootBytes()), ["bytes"]);
+    const expected = Math.min(CHUNK_BYTES, length - index * CHUNK_BYTES);
+    if (!(chunk?.bytes instanceof Uint8Array) || chunk.bytes.length !== expected) {
+      return fail(`chunk ${index} (${cid}) is not ${expected} bytes`);
+    }
+    bytes.set(chunk.bytes, index * CHUNK_BYTES);
+  };
+  for (let at = 0; at < chunks.length; at += CHUNKS_IN_FLIGHT) {
+    const batch = [];
+    for (let index = at; index < Math.min(chunks.length, at + CHUNKS_IN_FLIGHT); index++) {
+      batch.push(read(index).catch((error) => {
+        stop.abort(error);
+        throw error;
+      }));
+    }
+    await Promise.all(batch);
+  }
+  return new Blob([bytes], { type });
 }
 
 // dist/share-search.js
@@ -4886,6 +4960,210 @@ async function* searchHere(work, options) {
   }
 }
 
+// dist/tip.js
+var ReadError = class extends Error {
+  code;
+  constructor(code, detail, cause) {
+    const plain = {
+      unanchored: "unanchored tip",
+      tooFar: "tip too far",
+      disagree: "sources disagree"
+    };
+    super(`${plain[code]}: ${detail}`, { cause });
+    this.name = "ReadError";
+    this.code = code;
+  }
+};
+var HEADER_VOLUME_BYTES = 32 * 1024;
+var HEADER_BUDGET_BYTES = 4 * 1024;
+var PAGE = 25;
+var FUTURE_MILLISECONDS = 2 * 60 * 60 * 1e3;
+var LINKED = 64;
+function decoded(volume, cid) {
+  const block = decodeLatticeBlock(volume.rootBytes());
+  if (block === void 0)
+    throw new ReadError("unanchored", `${cid} is not a Lattice block`);
+  return block;
+}
+var size = (volume) => volume.entries().reduce((total, entry) => total + entry.bytes.length, 0);
+function tipChooser(options) {
+  const { sources, chainPath, root, maxHeaders, minAgree } = options;
+  const now = options.now ?? Date.now;
+  const isNexus = chainPath.length === 1;
+  const linked = /* @__PURE__ */ new Map();
+  const remember = (cid, entry) => {
+    linked.delete(cid);
+    linked.set(cid, entry);
+    for (const oldest of linked.keys()) {
+      if (linked.size <= LINKED)
+        break;
+      linked.delete(oldest);
+    }
+  };
+  let rootHeight;
+  async function walk(source, tip, signal) {
+    if (rootHeight === void 0) {
+      rootHeight = decoded(await source.headers.get(root, signal), root).height;
+    }
+    let budget = maxHeaders * HEADER_BUDGET_BYTES;
+    const spend = (volume) => {
+      budget -= size(volume);
+      return volume;
+    };
+    const fetched = /* @__PURE__ */ new Map();
+    let paged;
+    let paging = true;
+    const prefetch = async (height) => {
+      let floor = rootHeight;
+      for (const known of linked.values()) {
+        if (known.height < height && known.height > floor)
+          floor = known.height;
+      }
+      const limit = Number(height - floor < BigInt(PAGE) ? height - floor : BigInt(PAGE));
+      if (limit < 2)
+        return;
+      const page = await source.node.blocks({ before: height, limit }, signal);
+      paged = page.blocks.at(-1)?.height ?? height;
+      for (const row of page.blocks) {
+        if (fetched.has(row.hash))
+          continue;
+        const volume = source.headers.get(row.hash, signal).then(spend);
+        volume.catch(() => {
+        });
+        fetched.set(row.hash, volume);
+      }
+    };
+    let cid = tip;
+    let child;
+    let first;
+    let work = 0n;
+    for (let steps = 0; ; steps++) {
+      if (child !== void 0 && !fetched.has(cid) && paging) {
+        if (paged !== void 0 && child.block.height - 1n >= paged)
+          paging = false;
+        else
+          await prefetch(child.block.height);
+      }
+      const block = decoded(await (fetched.get(cid) ?? source.headers.get(cid, signal).then(spend)), cid);
+      if (budget < 0) {
+        throw new ReadError("tooFar", `walking ${tip} took more than ${maxHeaders * HEADER_BUDGET_BYTES} bytes`);
+      }
+      first ??= block;
+      if (block.timestamp > BigInt(now() + FUTURE_MILLISECONDS)) {
+        throw new ReadError("unanchored", `${cid} is stamped more than 2 hours ahead`);
+      }
+      if (child !== void 0) {
+        const next = child.block;
+        try {
+          assertBlockContinuity(cid, block, next);
+        } catch (error) {
+          throw new ReadError("unanchored", `${child.cid}: ${error.message}`, error);
+        }
+        if (next.specCID !== block.specCID) {
+          throw new ReadError("unanchored", `${child.cid} changes the chain's spec`);
+        }
+        if (next.timestamp <= block.timestamp) {
+          throw new ReadError("unanchored", `${child.cid} is not later than its parent`);
+        }
+        if (BigInt(next.target) > BigInt(block.nextTarget)) {
+          throw new ReadError("unanchored", `${child.cid} has an easier target than scheduled`);
+        }
+      }
+      if (cid === root)
+        return { block: first, work };
+      const known = linked.get(cid);
+      if (known !== void 0) {
+        remember(cid, known);
+        return { block: first, work: work + known.work };
+      }
+      if (block.height <= rootHeight || block.parentCID === void 0) {
+        throw new ReadError("unanchored", `${cid} does not descend from ${root}`);
+      }
+      if (isNexus && !verifyNexusBlockProofOfWork(block)) {
+        throw new ReadError("unanchored", `${cid} does not meet its proof-of-work target`);
+      }
+      if (steps >= maxHeaders) {
+        throw new ReadError("tooFar", `more than ${maxHeaders} blocks from ${root}; ship a newer checkpoint, or raise maxHeaders`);
+      }
+      work += workForTarget(block.target);
+      child = { cid, block };
+      cid = block.parentCID;
+    }
+  }
+  async function holds(source, cid, height, signal) {
+    try {
+      return (await source.node.block(height, signal)).hash === cid;
+    } catch {
+      signal?.throwIfAborted();
+      return false;
+    }
+  }
+  async function weigh(cid, holders, signal) {
+    let failure;
+    for (const [index, source] of holders.entries()) {
+      const order = [source, ...holders.filter((_, other) => other !== index)];
+      try {
+        if (root !== void 0)
+          return { holders: order, ...await walk(source, cid, signal) };
+        const block = decodeCanonicalBlock((await source.volumes.get(cid, signal)).rootBytes());
+        if (isNexus && block.height > 0n && !verifyNexusBlockProofOfWork(block)) {
+          throw new ReadError("unanchored", `${cid} does not meet its proof-of-work target`);
+        }
+        return { holders: order, block, work: block.height };
+      } catch (error) {
+        if (error instanceof ReadError && error.code === "unanchored")
+          throw error;
+        signal?.throwIfAborted();
+        failure = error;
+      }
+    }
+    throw failure;
+  }
+  return async function choose(signal) {
+    const answers = await Promise.allSettled(sources.map((source) => source.node.latestBlock(signal)));
+    signal?.throwIfAborted();
+    const answered = sources.filter((_, index) => answers[index].status === "fulfilled");
+    if (answered.length === 0)
+      throw answers[0].reason;
+    const named = /* @__PURE__ */ new Map();
+    answers.forEach((answer, index) => {
+      if (answer.status !== "fulfilled")
+        return;
+      const entry = named.get(answer.value.hash) ?? { height: answer.value.height, holders: [] };
+      entry.holders.push(sources[index]);
+      named.set(answer.value.hash, entry);
+    });
+    let best;
+    let failure;
+    for (const [cid, { height, holders }] of named) {
+      for (const other of answered) {
+        if (holders.length >= minAgree)
+          break;
+        if (!holders.includes(other) && await holds(other, cid, height, signal)) {
+          holders.push(other);
+        }
+      }
+      if (holders.length < minAgree)
+        continue;
+      try {
+        const weighed = await weigh(cid, holders, signal);
+        if (best === void 0 || weighed.work > best.work || weighed.work === best.work && cid < best.cid) {
+          best = { cid, ...weighed };
+        }
+      } catch (error) {
+        signal?.throwIfAborted();
+        failure = error;
+      }
+    }
+    if (best === void 0) {
+      throw failure ?? new ReadError("disagree", `${answered.length} of ${sources.length} sources answered and no tip is held by ${minAgree}`);
+    }
+    if (root !== void 0)
+      remember(best.cid, { height: best.block.height, work: best.work });
+    return best;
+  };
+}
+
 // dist/connect.js
 var WriteError = class extends Error {
   code;
@@ -4974,21 +5252,21 @@ async function patiently(request2, signal) {
 var refusal2 = (error) => error instanceof SponsorError ? error.refusal : void 0;
 var unknownClient = (error) => /unknown client token/.test(refusal2(error) ?? "");
 function fileVolumes(type, bytes) {
+  if (type.length > 255)
+    throw new RangeError("a file's type is at most 255 characters");
   const volume = (value) => {
     const block = encodeDagCbor(value);
     const cid = cidV1DagCbor(block);
     return { cid, entries: { [cid]: base64(block) } };
   };
+  const size2 = BigInt(bytes.length);
+  if (bytes.length <= 1 << 20)
+    return [volume({ bytes, size: size2, type })];
   const chunks = [];
   for (let at = 0; at < bytes.length; at += 1 << 20) {
     chunks.push(volume({ bytes: bytes.subarray(at, at + (1 << 20)) }));
   }
-  const root = volume({
-    chunks: chunks.map((chunk) => chunk.cid),
-    size: BigInt(bytes.length),
-    type
-  });
-  return [root, ...chunks];
+  return [volume({ chunks: chunks.map((chunk) => chunk.cid), size: size2, type }), ...chunks];
 }
 function base64(bytes) {
   let text = "";
@@ -5088,9 +5366,44 @@ async function connect(options) {
   const chainPath = options.chain.split("/");
   const fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
   const fresh = (input, init) => fetch(input, { ...init, cache: "no-store" });
-  const node = new NodeClient(options.node, chainPath, { fetch: fresh });
-  const volumes = new VolumeClient(new HTTPVolumeTransport(`${node.baseURL}/volumes`, { fetch }));
-  const lattice = new LatticeClient(node, volumes);
+  const urls = [
+    ...new Set((typeof options.node === "string" ? [options.node] : options.node).map(normalizeNodeURL))
+  ];
+  if (urls.length === 0)
+    throw new RangeError("node must name at least one node");
+  const minAgree = options.minAgree ?? Math.min(2, urls.length);
+  if (!Number.isSafeInteger(minAgree) || minAgree < 1 || minAgree > urls.length) {
+    throw new RangeError("minAgree must be from 1 to the number of nodes");
+  }
+  if (options.genesis !== void 0 && options.checkpoint !== void 0) {
+    throw new RangeError("give genesis or checkpoint, not both: a walk ends at one");
+  }
+  const sources = urls.map((url) => {
+    const node2 = new NodeClient(url, chainPath, { fetch: fresh });
+    const transport = new HTTPVolumeTransport(`${node2.baseURL}/volumes`, { fetch });
+    return {
+      node: node2,
+      volumes: new VolumeClient(transport),
+      headers: new VolumeClient(new BatchingVolumeTransport(transport), {
+        maximumEntries: 64,
+        maximumBytes: HEADER_VOLUME_BYTES
+      }),
+      files: new VolumeClient(new HTTPVolumeTransport(`${node2.baseURL}/volumes`, { fetch, limits: FILE_VOLUME_LIMITS }), FILE_VOLUME_LIMITS)
+    };
+  });
+  const { node } = sources[0];
+  const maxHeaders = options.maxHeaders ?? 2e3;
+  if (!Number.isSafeInteger(maxHeaders) || maxHeaders < 1) {
+    throw new RangeError("maxHeaders must be a positive integer");
+  }
+  const root = options.checkpoint ?? options.genesis;
+  const chooseTip = tipChooser({
+    sources,
+    chainPath,
+    ...root === void 0 ? {} : { root },
+    maxHeaders,
+    minAgree
+  });
   const submitter = new HTTPTransactionSubmitter(`${node.baseURL}/transactions`, { fetch });
   const sponsors = (options.sponsors ?? []).map((url) => new SponsorClient(url, { fetch }));
   const privateKey = options.key === void 0 ? storedKey(options.storageKey ?? `lattice-sdk/key/${options.chain}`) : typeof options.key === "string" ? hexToBytes(options.key) : options.key;
@@ -5116,10 +5429,20 @@ async function connect(options) {
     return signals.length < 2 ? signals[0] : AbortSignal.any(signals);
   };
   await node.chainInfo(options.signal);
-  async function state(signal) {
-    const latest = await lattice.latestBlock(signal);
-    const post = await volumes.get(latest.canonical.postStateCID, signal);
-    return trie(volumes, decodeCanonicalLatticeState(post.rootBytes()).generalStateCID, signal);
+  async function atTip(read, signal) {
+    const tip = await chooseTip(signal);
+    let failure;
+    for (const { volumes } of tip.holders) {
+      try {
+        const post = await volumes.get(tip.block.postStateCID, signal);
+        const general = decodeCanonicalLatticeState(post.rootBytes()).generalStateCID;
+        return await read(trie(volumes, general, signal));
+      } catch (error) {
+        signal?.throwIfAborted();
+        failure = error;
+      }
+    }
+    throw failure;
   }
   async function nextNonce(signal) {
     try {
@@ -5249,7 +5572,7 @@ async function connect(options) {
   }
   async function set(key, value, signal) {
     const [old, { nonce, balance }] = await Promise.all([
-      state(signal).then((reads) => reads.get(key)),
+      atTip((reads) => reads.get(key), signal),
       nextNonce(signal)
     ]);
     const action = {
@@ -5297,23 +5620,23 @@ async function connect(options) {
   }
   async function put(data, type, signal) {
     const bytes = data instanceof Uint8Array ? data : new Uint8Array(await data.arrayBuffer());
-    const volumes2 = fileVolumes(type ?? ((data instanceof Uint8Array ? "" : data.type) || "application/octet-stream"), bytes);
-    const root = volumes2[0].cid;
+    const volumes = fileVolumes(type ?? ((data instanceof Uint8Array ? "" : data.type) || "application/octet-stream"), bytes);
+    const root2 = volumes[0].cid;
     return viaSponsors(async (sponsor) => {
-      progress({ stage: "store", sponsor: sponsor.endpoint, root });
-      const held = await patiently(() => sponsor.store(root, volumes2, signal), signal);
+      progress({ stage: "store", sponsor: sponsor.endpoint, root: root2 });
+      const held = await patiently(() => sponsor.store(root2, volumes, signal), signal);
       if (held.stored)
-        return root;
+        return root2;
       const priced = Object.keys(held.needed);
       const chain = priced.includes(options.chain) ? options.chain : priced[0];
       if (chain === void 0)
         throw new WriteError("sponsorUnavailable", "it sells no storage");
       if (held.credit < held.bytes) {
-        await earn(sponsor, { chain, store: root }, async () => (await sponsor.storeStatus(root, signal)).credit >= held.bytes, signal);
+        await earn(sponsor, { chain, store: root2 }, async () => (await sponsor.storeStatus(root2, signal)).credit >= held.bytes, signal);
       }
       for (let poll = 0; poll < PIN_POLLS; poll++) {
-        if ((await patiently(() => sponsor.storeStatus(root, signal), signal)).stored)
-          return root;
+        if ((await patiently(() => sponsor.storeStatus(root2, signal), signal)).stored)
+          return root2;
         await sleep(POLL_MILLISECONDS, signal);
       }
       throw new WriteError("sponsorUnavailable", "paid, but the sponsor did not pin it");
@@ -5323,13 +5646,13 @@ async function connect(options) {
     chain: options.chain,
     address: account.address,
     async get(key, { signal } = {}) {
-      return (await state(signalFor(signal))).get(key);
+      return atTip((reads) => reads.get(key), signalFor(signal));
     },
     async list(prefix = "", { limit = 100, signal } = {}) {
       if (!Number.isSafeInteger(limit) || limit < 1) {
         throw new RangeError("limit must be a positive integer");
       }
-      return (await state(signalFor(signal))).list(prefix, limit);
+      return atTip((reads) => reads.list(prefix, limit), signalFor(signal));
     },
     set(key, value, { signal } = {}) {
       const combined = signalFor(signal);
@@ -5338,6 +5661,25 @@ async function connect(options) {
     put(data, { type, signal } = {}) {
       const combined = signalFor(signal);
       return oneAtATime(combined, () => put(data, type, combined));
+    },
+    async getFile(root2, { maxBytes = 64 << 20, signal } = {}) {
+      if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+        throw new RangeError("maxBytes must be a non-negative integer");
+      }
+      const combined = signalFor(signal);
+      const { holders } = await chooseTip(combined);
+      let failure;
+      for (const holder of holders) {
+        try {
+          return await readFile(holder.files, root2, maxBytes, combined);
+        } catch (error) {
+          if (error instanceof RangeError)
+            throw error;
+          combined?.throwIfAborted();
+          failure = error;
+        }
+      }
+      throw failure;
     }
   };
 }
@@ -5360,6 +5702,7 @@ export {
   NodeClient,
   NodeError,
   OPERATOR_DECLARED,
+  ReadError,
   SIGNATURE_DOMAIN,
   SUBMISSION_REFUSALS,
   SponsorClient,
