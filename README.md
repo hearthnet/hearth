@@ -446,6 +446,7 @@ LATTICE=<lattice-node>/.build/debug/lattice SPONSOR=<lattice-sponsor>/.build/deb
 `test/devnet.mjs` runs a local market to work on the page against. The
 devnet scripts (`test/devnet.mjs`, `test/e2e.mjs`, `test/e2e-commit.mjs`)
 run the seller with lattice-sponsor from `PATH`, or from `SPONSOR=<path>`
-when it is set; `test/e2e-seller.mjs` needs `SPONSOR`, and a lattice-node
+when it is set; `test/e2e-seller.mjs` needs `SPONSOR` (a lattice-sponsor
+with `POST /takedown` and `storage` in `/terms`), and a lattice-node
 whose template requests take `exclude` (its check that no paced chain gets
 a block before its tip is a target block time old fails without it).
