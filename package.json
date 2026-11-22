@@ -1,0 +1,13 @@
+{
+  "name": "@hearthnet/hearth",
+  "version": "0.1.0",
+  "description": "Sell Lattice chain hosting on the Hearth market from your node, in one command.",
+  "type": "module",
+  "bin": { "hearth": "bin/hearth.mjs" },
+  "files": ["bin/", "host/", "client/", "vendor/"],
+  "engines": { "node": ">=22" },
+  "scripts": { "test": "node --test test/verdict.test.mjs test/storage.test.mjs test/hearth.test.mjs test/mining.test.mjs test/seller.test.mjs test/app-rules.test.mjs test/app-snippet.test.mjs test/app-launch.test.mjs test/app-once.test.mjs" },
+  "license": "MIT",
+  "homepage": "https://hearthnet.github.io/",
+  "repository": { "type": "git", "url": "git+https://github.com/hearthnet/hearth.git" }
+}

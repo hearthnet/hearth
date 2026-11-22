@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hearth — a home for your chain</title>
+<meta name="description" content="Launch a Lattice chain without running a node: buy coin, pay a host by the day, and see which hosts serve what they sold.">
+<link rel="icon" href="brand/hearth/favicon.ico" sizes="48x48">
+<link rel="icon" href="brand/hearth/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="brand/hearth/apple-touch-icon.png">
+<meta name="theme-color" content="#2B2420">
+<style>
+:root {
+  --ember: #E8590C; --charcoal: #2B2420; --cream: #F6EFE6;
+  --ink: #16191D; --muted: #5A616B; --faint: #8A919B; --line: #E3E6EA; --soft: #F4F6F8; --bg: #FFFFFF;
+  /* Ember marks and fills; text and buttons use --accent-ink, which passes AA. */
+  --accent: var(--ember); --accent-ink: var(--charcoal); --accent-hover: #4A3E36; --on-accent: var(--cream); --accent-soft: #FCEDE3;
+  --ok: #157347; --ok-bg: #E7F5EE; --warn: #8A5A00; --warn-bg: #FBF4E4; --bad: #B42318; --bad-bg: #FDECEA;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ink: #E9ECEF; --muted: #A3AAB4; --faint: #7D848E; --line: #2B3036; --soft: #1B1F24; --bg: #111418;
+    --accent: var(--ember); --accent-ink: var(--cream); --accent-hover: #FFFFFF; --on-accent: var(--charcoal); --accent-soft: #2E211B;
+    --ok: #5CCB95; --ok-bg: #12291F; --warn: #E7B45A; --warn-bg: #2A2312; --bad: #FF8A80; --bad-bg: #321715;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --ink: #E9ECEF; --muted: #A3AAB4; --faint: #7D848E; --line: #2B3036; --soft: #1B1F24; --bg: #111418;
+  --accent: var(--ember); --accent-ink: var(--cream); --accent-hover: #FFFFFF; --on-accent: var(--charcoal); --accent-soft: #2E211B;
+  --ok: #5CCB95; --ok-bg: #12291F; --warn: #E7B45A; --warn-bg: #2A2312; --bad: #FF8A80; --bad-bg: #321715;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: var(--accent-ink); }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+h1, h2, h3 { margin: 0; letter-spacing: -0.01em; line-height: 1.25; }
+h1 { font-size: 28px; } h2 { font-size: 20px; } h3 { font-size: 16px; }
+p { margin: 0; }
+[hidden] { display: none !important; }
+.muted { color: var(--muted); } .small { font-size: 13px; } .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; word-break: break-all; }
+.wrap { max-width: 960px; margin: 0 auto; padding: 0 16px; }
+
+header { border-bottom: 1px solid var(--line); }
+header .wrap { display: flex; align-items: center; gap: 20px; min-height: 60px; flex-wrap: wrap; }
+.brand { display: flex; align-items: center; color: var(--accent-ink); text-decoration: none; }
+.brand svg { display: block; height: 28px; width: auto; }
+nav { display: flex; gap: 4px; flex-wrap: wrap; flex: 1; }
+nav a { padding: 6px 10px; border-radius: 8px; color: var(--muted); text-decoration: none; font-weight: 550; }
+nav a[aria-current="page"] { color: var(--ink); background: var(--soft); }
+.wallet-chip { display: flex; gap: 12px; align-items: center; font-size: 14px; color: var(--muted); text-decoration: none; }
+.wallet-chip b { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+main { padding: 28px 0 64px; }
+section + section { margin-top: 36px; }
+.lead { font-size: 18px; color: var(--muted); max-width: 640px; margin-top: 8px; }
+.stack > * + * { margin-top: 12px; }
+.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.spacer { flex: 1; }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 8px 16px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); cursor: pointer; font-weight: 600; text-decoration: none; color: var(--ink); }
+.btn.primary { background: var(--accent-ink); border-color: var(--accent-ink); color: var(--on-accent); }
+.btn.primary:hover { background: var(--accent-hover); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.small { min-height: 32px; padding: 4px 12px; font-size: 14px; }
+
+.card { border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+.card.soft { background: var(--soft); border-color: transparent; }
+.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+
+table { width: 100%; border-collapse: collapse; font-size: 15px; }
+th { text-align: left; font-weight: 600; color: var(--muted); font-size: 13px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+td { padding: 12px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.table-scroll { overflow-x: auto; }
+
+label { display: block; font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+.hint { font-size: 13px; color: var(--muted); margin-top: 4px; }
+input[type=text], input[type=number], select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.fields { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+details summary { cursor: pointer; font-weight: 600; }
+label.choice { display: flex; gap: 10px; align-items: flex-start; font-weight: 400; font-size: 15px; margin: 0; cursor: pointer; }
+label.choice input { margin-top: 4px; }
+
+.pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 650; background: var(--soft); color: var(--muted); white-space: nowrap; }
+.pill.ok { background: var(--ok-bg); color: var(--ok); } .pill.warn { background: var(--warn-bg); color: var(--warn); } .pill.bad { background: var(--bad-bg); color: var(--bad); } .pill.info { background: var(--accent-soft); color: var(--accent-ink); }
+.notice { padding: 12px 14px; border-radius: 10px; background: var(--warn-bg); color: var(--ink); font-size: 14px; }
+.notice.bad { background: var(--bad-bg); } .notice.ok { background: var(--ok-bg); } .notice.info { background: var(--accent-soft); }
+
+.steps { list-style: none; padding: 0; margin: 0; }
+.steps li { display: flex; gap: 12px; padding: 10px 0; align-items: flex-start; }
+.steps .dot { flex: none; width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line); margin-top: 1px; display: grid; place-items: center; font-size: 12px; font-weight: 800; }
+.steps li.done .dot { background: var(--ok); border-color: var(--ok); color: var(--on-accent); }
+.steps li.now .dot { border-color: var(--accent); }
+.steps li.now .dot::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s infinite; }
+.steps li.failed .dot { background: var(--bad); border-color: var(--bad); color: #fff; }
+@keyframes pulse { 50% { opacity: .3; } }
+.steps li:not(.done):not(.now):not(.failed) { color: var(--faint); }
+
+.stat { font-size: 26px; font-weight: 750; font-variant-numeric: tabular-nums; }
+.bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--soft); }
+.bar > span { display: block; }
+.empty { padding: 28px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 14px; }
+footer { border-top: 1px solid var(--line); padding: 20px 0 40px; color: var(--muted); font-size: 13px; }
+@media (max-width: 600px) { h1 { font-size: 24px; } .wallet-chip { width: 100%; } main { padding-top: 20px; } }
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <a class="brand" href="#/" aria-label="Hearth"><svg viewBox="0 0 988 256" aria-hidden="true"><path fill="currentColor" d="M36 28 H80 V228 H36 Z M176 28 H220 V228 H176 Z M80 84 H176 V112 H80 Z"/><path fill="#E8590C" d="M104 180 C104 164 108 152 112 140 C116 148 118 154 120 158 C120 138 124 122 128 104 C132 122 136 138 136 158 C138 154 140 148 144 140 C148 152 152 164 152 180 A24 24 0 0 1 104 180 Z" transform="translate(128,228) scale(1.0) translate(-128,-204)"/><g transform="translate(312,28)"><path fill="currentColor" fill-rule="evenodd" d="M0 24 H28 V200 H0 Z"/><path fill="currentColor" fill-rule="evenodd" d="M0 130 A50 50 0 0 1 100 130 V200 H72 V130 A22 22 0 0 0 28 130 Z"/><path fill="currentColor" fill-rule="evenodd" d="M240.79 152 A60 60 0 1 0 227.96 178.57 L206.51 160.57 A32 32 0 0 1 152.34 152 Z M152.34 128 A32 32 0 0 1 211.66 128 Z"/><path fill="currentColor" fill-rule="evenodd" d="M264 140 A60 60 0 1 0 384 140 A60 60 0 1 0 264 140 Z M292 140 A32 32 0 1 0 356 140 A32 32 0 1 0 292 140 Z"/><path fill="currentColor" fill-rule="evenodd" d="M356 80 H384 V200 H356 Z"/><path fill="currentColor" fill-rule="evenodd" d="M406 80 H434 V200 H406 Z"/><path fill="currentColor" fill-rule="evenodd" d="M406 130 A50 50 0 0 1 456 80 H478 V108 H456 A22 22 0 0 0 434 130 Z"/><path fill="currentColor" fill-rule="evenodd" d="M510 40 H538 V200 H510 Z"/><path fill="currentColor" fill-rule="evenodd" d="M490 80 H562 V108 H490 Z"/><path fill="currentColor" fill-rule="evenodd" d="M576 24 H604 V200 H576 Z"/><path fill="currentColor" fill-rule="evenodd" d="M576 130 A50 50 0 0 1 676 130 V200 H648 V130 A22 22 0 0 0 604 130 Z"/></g></svg></a>
+  <nav aria-label="Main">
+    <a href="#/" data-route="launch">Launch a chain</a>
+    <a href="#/coin" data-route="coin">Buy coin</a>
+    <a href="#/hosts" data-route="hosts">Hosts</a>
+    <a href="#/storage" data-route="storage">Storage</a>
+    <a href="#/orders" data-route="orders">Your chains</a>
+    <a href="https://hearthnet.github.io/">Docs</a>
+  </nav>
+  <a class="wallet-chip" href="#/wallet" id="chip" title="Your account in this browser"></a>
+</div></header>
+<main><div class="wrap" id="view"><p class="muted">Loading the market…</p></div></main>
+<footer><div class="wrap" id="foot"></div></footer>
+<script type="module" src="app/app.mjs"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+{
+  "note": "The market deployed on the testnet. Its policy module's bytes were built from policy/src before a path remap and are not committed; chain/policy.wasm is this repo's build of policy/src, and chain/spec.json is the spec of a devnet market running it.",
+  "path": "Nexus/testnet/lodger-3129cc",
+  "genesis": "bafyreicbllerm4n3yyknvd7hbwwmwtf27qubbihgp7umj6fzf7cr32zeua",
+  "moduleCID": "bafyreihubealypiq7club3dkvj7744dem7zswqlmvxuflfbj36kgv4z6zy",
+  "targetBlockTime": 60000
+}

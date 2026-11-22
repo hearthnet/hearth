@@ -1,0 +1,14 @@
+# The rule presets the web app offers at launch, built on the policy rule
+# library in ../../policy/rules. build.sh builds them and copies each module
+# here, where the app loads it; a chain names its module by CID, so rebuilding
+# must give the same bytes (see build.sh).
+[workspace]
+members = ["own-keys", "write-once"]
+resolver = "2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
