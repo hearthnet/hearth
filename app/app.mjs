@@ -185,7 +185,7 @@ async function probe(url, path, payload) {
     else if (!sameGenesis(sdk, g, payload)) result = { state: "other" };
     else {
       const latest = await h.api("/api/block/latest", path);
-      result = { state: "serving", height: BigInt(latest.height), time: Number(latest.timestamp) };
+      result = { state: "serving", genesis: g.hash, height: BigInt(latest.height), time: Number(latest.timestamp) };
     }
   } catch (e) {
     result = { state: "down", error: e.message };
@@ -938,10 +938,15 @@ async function viewOrder(view, key, current) {
   const rulesKnown = policies.length === 0 || RULES.own.cid !== undefined;
   const ownKeys = policies.some((policy) => policy.moduleCID === RULES.own.cid);
   const node = parseHostURL(m.urlValues.get(o.host))?.read;
-  const use = { sdkURL: SDK_URL, chain: o.path, node, sponsors: [...new Set(hosting.map(([, k]) => sponsorURL(m.terms.get(k))).filter(Boolean))], ownKeys };
+  // Reads go through this host's node (it takes the writes) and every other
+  // host's you ordered from that publishes one; with two or more, a block is
+  // read only once two of them hold it. The genesis is the one probe checked
+  // against this order's payload.
+  const nodes = [...new Set([node, ...hosting.map(([x]) => parseHostURL(m.urlValues.get(x.host))?.read)].filter(Boolean))];
+  const use = { sdkURL: SDK_URL, chain: o.path, genesis: p?.genesis, nodes, sponsors: [...new Set(hosting.map(([, k]) => sponsorURL(m.terms.get(k))).filter(Boolean))], ownKeys };
   const snippetBlock = !rulesKnown ? `<div class="notice bad">The rule presets did not load, so this page can't tell which keys this chain lets you write. <a href="" onclick="location.reload();return false">Reload</a> to try again.</div>`
     : !node ? `<div class="notice bad">This host's read URL is not a valid https URL, so there is nothing to connect to.</div>`
-    : `<p class="muted">${SDK_TAG ? "Paste this into any web page. It" : "Test write"} writes one key and reads it back, checking what it reads against the chain. ${use.sponsors.length ? "Your hosts' sponsors pay the write fees: the writer's device does a few seconds of work instead." : "None of the hosts you ordered from names a sponsor, so whoever writes needs coin on this chain to pay the fee."}</p>
+    : `<p class="muted">${SDK_TAG ? "Paste this into any web page. It" : "Test write"} writes one key and reads it back, checking what it reads against the chain's genesis. ${nodes.length > 1 ? `It reads a block only once two of your hosts' nodes hold it.` : `Only one of your hosts publishes a node, so its reads trust that one node: it could serve a made-up block. Order from a host of another operator to check it.`} ${use.sponsors.length ? "Your hosts' sponsors pay the write fees: the writer's device does a few seconds of work instead." : "None of the hosts you ordered from names a sponsor, so whoever writes needs coin on this chain to pay the fee."}</p>
      ${SDK_TAG ? `<pre class="mono card soft" style="white-space:pre-wrap;margin:0" id="snippet">${esc(snippet(use))}</pre>` : `<p class="small muted">The code to paste appears here once a release of the SDK is tagged. Test write works now.</p>`}
      <div class="row">${SDK_TAG ? `<button class="btn small" id="copy">Copy</button>` : ""}<button class="btn small" id="tryWrite">Test write</button><span class="small" id="tryNote"></span></div>`;
   const settled = v.kind !== "pending";
@@ -958,7 +963,7 @@ async function viewOrder(view, key, current) {
       const now = !done && steps.slice(0, i).every((s) => s[1]);
       return `<li class="${done ? "done" : now ? "now" : ""}"><span class="dot">${done ? "✓" : ""}</span><span><b>${label}</b>${note ? `<br><span class="small muted">${note}</span>` : ""}</span></li>`; }).join("")}</ol></section>`}
   ${launched ? `<section class="card stack"><h2>Use it</h2>
-     <div class="grid"><div><p class="muted small">Read and write through</p><p class="mono">${esc(node ?? url)}</p></div><div><p class="muted small">You ordered it from</p><p>${hosting.length ? hosting.map(([x]) => esc(hostName(x.host))).join(", ") : "No host, from this browser"}</p></div></div>
+     <div class="grid"><div><p class="muted small">Read and write through</p><p class="mono">${nodes.length ? nodes.map(esc).join("<br>") : esc(url)}</p></div><div><p class="muted small">You ordered it from</p><p>${hosting.length ? hosting.map(([x]) => esc(hostName(x.host))).join(", ") : "No host, from this browser"}</p></div></div>
      <div class="grid"><div><p class="muted small">Height</p><p class="stat">${fmt(p.height)}</p></div><div><p class="muted small">Latest block</p><p class="stat" style="font-size:20px">${p.time ? ago(p.time) : "—"}</p></div>
      <div><p class="muted small">Paid until</p><p class="stat" style="font-size:20px">${v.active ? `in ${duration(v.until - m.height)}` : "ended"}</p></div></div>
      <p class="small" id="making" hidden></p>
@@ -982,7 +987,8 @@ async function viewOrder(view, key, current) {
       // The vendored copy the snippet's URL serves once tagged: no remote code beside your key.
       const { connect } = await import("../vendor/lattice-browser.js");
       note.textContent = "Writing… (paying the fee in work can take a minute)";
-      const db = await connect({ chain: use.chain, node: use.node, sponsors: use.sponsors });
+      // Walked back to genesis: as many blocks as the chain has, and room to grow.
+      const db = await connect({ chain: use.chain, genesis: use.genesis, maxHeaders: Math.max(2000, Number(p.height) + 500), node: use.nodes, sponsors: use.sponsors });
       const key = ownKeys ? `hello/${db.address}` : `hello/${Date.now()}`;
       await db.set(key, "Test write from Hearth");
       note.textContent = `Wrote ${key} and read back: ${await db.get(key)}`;

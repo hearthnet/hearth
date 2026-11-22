@@ -1007,9 +1007,9 @@ var Decoder = class {
   }
 };
 function decodeDagCbor(bytes) {
-  const decoder = new Decoder(bytes);
-  const value = decoder.decode();
-  if (!decoder.finished)
+  const decoder2 = new Decoder(bytes);
+  const value = decoder2.decode();
+  if (!decoder2.finished)
     throw new Error("trailing bytes after DAG-CBOR value");
   return value;
 }
@@ -1142,10 +1142,10 @@ function canonicalBlockProofOfWorkPreimage(block) {
     String(block.version),
     block.parentCID ?? "",
     block.transactionsCID,
-    // UInt256.toHexString(), used by consensus, hashes the parsed value as
-    // minimal lower-case hex without the DAG-CBOR field's `0x` prefix.
-    targetInteger(block.target).toString(16),
-    targetInteger(block.nextTarget).toString(16),
+    // UInt256 2.0.0's toHexString(), used by consensus: all 64 lower-case
+    // hex digits, zero-padded, without the DAG-CBOR field's `0x` prefix.
+    targetInteger(block.target).toString(16).padStart(64, "0"),
+    targetInteger(block.nextTarget).toString(16).padStart(64, "0"),
     block.specCID,
     block.parentStateCID,
     block.previousStateCID,
@@ -1932,6 +1932,214 @@ function nodeCookieAuthorization(cookie) {
   if (!value.includes(":"))
     return `Bearer ${value}`;
   return `Basic ${btoa(value)}`;
+}
+
+// packages/core/dist/child-proof.js
+var decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+function decodeChildBlockProof(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let position = 0;
+  const u16 = () => {
+    if (position + 2 > bytes.length)
+      throw new Error();
+    const value = view.getUint16(position, true);
+    position += 2;
+    return value;
+  };
+  const u32 = () => {
+    if (position + 4 > bytes.length)
+      throw new Error();
+    const value = view.getUint32(position, true);
+    position += 4;
+    return value;
+  };
+  const take = (length) => {
+    if (position + length > bytes.length)
+      throw new Error();
+    const slice = bytes.subarray(position, position + length);
+    position += length;
+    return slice;
+  };
+  const text = (length) => decoder.decode(take(length));
+  try {
+    const rootCID = text(u16());
+    const directoryPath = [];
+    for (let count = u16(); count > 0; count -= 1)
+      directoryPath.push(text(u16()));
+    const entries = [];
+    let previous;
+    for (let count = u16(); count > 0; count -= 1) {
+      const cid = text(u16());
+      const data = take(u32()).slice();
+      if (previous !== void 0 && previous >= cid)
+        return void 0;
+      previous = cid;
+      entries.push({ cid, data });
+    }
+    if (position !== bytes.length)
+      return void 0;
+    return { rootCID, directoryPath, entries };
+  } catch {
+    return void 0;
+  }
+}
+function isStandardCID(value) {
+  try {
+    const parsed = parseCID(value);
+    return parsed.codec === 113 && parsed.multihashCode === 18 && parsed.digest.length === 32;
+  } catch {
+    return false;
+  }
+}
+function isValidChildDirectory(value) {
+  return value.length > 0 && value.length <= 65535 && /^[\x21-\x2e\x30-\x7e]+$/.test(value);
+}
+function isLink(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) && !(value instanceof Uint8Array) && Object.keys(value).length === 1 && typeof value.rawCID === "string" && isStandardCID(value.rawCID);
+}
+var blockFields = /* @__PURE__ */ new Set([
+  "version",
+  "parent",
+  "transactions",
+  "target",
+  "nextTarget",
+  "spec",
+  "parentState",
+  "prevState",
+  "postState",
+  "children",
+  "height",
+  "timestamp",
+  "rewardRecipient",
+  "nonce"
+]);
+var blockLinks = [
+  "parent",
+  "transactions",
+  "spec",
+  "parentState",
+  "prevState",
+  "postState",
+  "children"
+];
+function decodeLatticeBlock(bytes) {
+  try {
+    const value = decodeDagCbor(bytes);
+    if (Object.keys(value).some((key) => !blockFields.has(key)))
+      return void 0;
+    if (blockLinks.some((key) => value[key] !== void 0 && !isLink(value[key])))
+      return void 0;
+    if (!isPrefixedHex(value.target) || !isPrefixedHex(value.nextTarget))
+      return void 0;
+    return decodeCanonicalBlock(bytes);
+  } catch {
+    return void 0;
+  }
+}
+function isPrefixedHex(value) {
+  return typeof value === "string" && /^0x(0|[1-9a-f][0-9a-f]{0,63})$/.test(value);
+}
+function hasWellFormedRewardRecipient(block) {
+  return block.rewardRecipient === void 0 || isStandardCID(block.rewardRecipient);
+}
+function bigEndian(bytes) {
+  let value = 0n;
+  for (const byte of bytes)
+    value = value << 8n | BigInt(byte);
+  return value;
+}
+function meets(block, hash) {
+  const target = BigInt(block.target);
+  return target > 0n && target >= hash;
+}
+function verifyChildBlockProof(proof, childBytes, chainPath) {
+  const fail = (failure) => ({ ok: false, failure });
+  const { rootCID, directoryPath, entries } = proof;
+  if (chainPath[0] !== "Nexus" || directoryPath.length === 0 || directoryPath.length > 65535 || chainPath.length !== directoryPath.length + 1 || directoryPath.some((directory, index) => directory !== chainPath[index + 1]) || entries.length === 0) {
+    return fail("malformedEvidence");
+  }
+  const child = decodeLatticeBlock(childBytes);
+  if (child === void 0)
+    return fail("malformedEvidence");
+  const childCID = cidV1DagCbor(childBytes);
+  const proofEntries = /* @__PURE__ */ new Map();
+  for (const entry of entries) {
+    if (proofEntries.has(entry.cid))
+      return fail("malformedEvidence");
+    proofEntries.set(entry.cid, entry.data);
+  }
+  const rootData = proofEntries.get(rootCID);
+  if (rootData === void 0 || cidV1DagCbor(rootData) !== rootCID)
+    return fail("malformedEvidence");
+  const root = decodeLatticeBlock(rootData);
+  if (root === void 0 || !hasWellFormedRewardRecipient(root))
+    return fail("protocolInvalid");
+  const rootHash = bigEndian(canonicalBlockProofOfWorkHash(root));
+  const consumed = /* @__PURE__ */ new Set([rootCID]);
+  const resolve = (cid) => {
+    const data = proofEntries.get(cid);
+    if (data === void 0 || cidV1DagCbor(data) !== cid)
+      return void 0;
+    consumed.add(cid);
+    return data;
+  };
+  const carriers = [{ block: root, cid: rootCID }];
+  let current = root;
+  for (const [index, directory] of directoryPath.entries()) {
+    const childrenData = resolve(current.childrenCID);
+    let children;
+    try {
+      if (childrenData === void 0)
+        return fail("malformedEvidence");
+      const decoded = decodeDagCbor(childrenData);
+      if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded) || decoded instanceof Uint8Array) {
+        return fail("malformedEvidence");
+      }
+      children = decoded;
+    } catch {
+      return fail("malformedEvidence");
+    }
+    const link = children[directory];
+    if (link === void 0 || !Object.hasOwn(children, directory))
+      return fail("malformedEvidence");
+    const linkCID = link !== null && typeof link === "object" && !Array.isArray(link) && !(link instanceof Uint8Array) ? link.rawCID : void 0;
+    const nextData = typeof linkCID === "string" ? resolve(linkCID) : void 0;
+    const next = nextData === void 0 ? void 0 : decodeLatticeBlock(nextData);
+    if (next === void 0)
+      return fail("malformedEvidence");
+    const wellFormed = Object.entries(children).every(([key, value]) => isValidChildDirectory(key) && isLink(value));
+    if (!wellFormed)
+      return fail("protocolInvalid");
+    if (index === directoryPath.length - 1) {
+      if (linkCID !== childCID)
+        return fail("malformedEvidence");
+      if (child.parentStateCID !== current.previousStateCID)
+        return fail("protocolInvalid");
+      if (consumed.size !== proofEntries.size)
+        return fail("malformedEvidence");
+      const deepest = carriers[carriers.length - 1];
+      const credited = carriers.find((carrier) => meets(carrier.block, rootHash));
+      const creditedAncestorWork = credited === void 0 ? 0n : workForTarget(credited.block.target);
+      const own = workForTarget(child.target);
+      return {
+        ok: true,
+        evidence: {
+          grindID: rootCID,
+          rootHash,
+          creditedAncestorWork,
+          childCID,
+          terminalCarrierCID: deepest.cid,
+          ...meets(child, rootHash) ? { work: creditedAncestorWork > own ? creditedAncestorWork : own } : {}
+        }
+      };
+    }
+    if (!hasWellFormedRewardRecipient(next) || next.parentStateCID !== current.previousStateCID) {
+      return fail("protocolInvalid");
+    }
+    current = next;
+    carriers.push({ block: next, cid: linkCID });
+  }
+  return fail("malformedEvidence");
 }
 
 // packages/client/dist/lattice-client.js
@@ -3158,14 +3366,26 @@ var SponsorError = class extends Error {
   status;
   /** The sponsor's refusal, such as `insufficientCredit` or `expired`. */
   refusal;
-  constructor(status, refusal2) {
+  /** How long the answer's `Retry-After` asks to wait, in milliseconds. */
+  retryAfterMilliseconds;
+  constructor(status, refusal2, retryAfterMilliseconds) {
     super(refusal2 ?? `sponsor request failed with HTTP ${status}`);
     this.name = "SponsorError";
     this.status = status;
     if (refusal2 !== void 0)
       this.refusal = refusal2;
+    if (retryAfterMilliseconds !== void 0)
+      this.retryAfterMilliseconds = retryAfterMilliseconds;
   }
 };
+function retryAfter(header) {
+  if (header === null)
+    return void 0;
+  if (/^[0-9]+$/.test(header.trim()))
+    return Number(header.trim()) * 1e3;
+  const date = Date.parse(header);
+  return Number.isNaN(date) ? void 0 : Math.max(0, date - Date.now());
+}
 function decimal2(value, name) {
   if (typeof value !== "string" || !/^(?:0|[1-9][0-9]*)$/.test(value)) {
     throw new TypeError(`${name} must be a canonical decimal string`);
@@ -3219,14 +3439,15 @@ var SponsorClient = class {
     const text = await boundedText2(response, this.#maximumResponseBytes);
     if (text === void 0)
       throw new SponsorError(response.status, "response too large");
+    const wait = response.ok ? void 0 : retryAfter(response.headers.get("retry-after"));
     let decoded;
     try {
       decoded = JSON.parse(text);
     } catch {
-      throw new SponsorError(response.status, response.ok ? "invalid JSON response" : void 0);
+      throw new SponsorError(response.status, response.ok ? "invalid JSON response" : void 0, wait);
     }
     if (!response.ok)
-      throw new SponsorError(response.status, errorMessage(decoded));
+      throw new SponsorError(response.status, errorMessage(decoded), wait);
     if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded)) {
       throw new SponsorError(response.status, "invalid sponsor response");
     }
@@ -3569,7 +3790,7 @@ var BatchingVolumeTransport = class {
 var MANY_VOLUMES_MEDIA_TYPE = "application/vnd.lattice.volumes";
 function decodeVolumeRecords(body) {
   const view = new DataView(body.buffer, body.byteOffset, body.byteLength);
-  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const decoder2 = new TextDecoder("utf-8", { fatal: true });
   const records = [];
   let offset = 0;
   const need = (length) => {
@@ -3582,7 +3803,7 @@ function decodeVolumeRecords(body) {
     const rootLength = view.getUint16(offset);
     offset += 2;
     need(rootLength);
-    const rootCID = decoder.decode(body.subarray(offset, offset + rootLength));
+    const rootCID = decoder2.decode(body.subarray(offset, offset + rootLength));
     offset += rootLength;
     need(4);
     const archiveLength = view.getUint32(offset);
@@ -4081,7 +4302,7 @@ function decodeVolumeArchive(rootCID, archive, limits = DEFAULT_VOLUME_LIMITS) {
     archiveFailure("archive has no entries");
   if (count > limits.maximumEntries)
     archiveFailure("archive exceeds the entry limit");
-  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const decoder2 = new TextDecoder("utf-8", { fatal: true });
   const entries = [];
   let previous;
   let payloadBytes = 0;
@@ -4092,7 +4313,7 @@ function decodeVolumeArchive(rootCID, archive, limits = DEFAULT_VOLUME_LIMITS) {
     requireBytes(cidLength);
     let cid;
     try {
-      cid = decoder.decode(archive.subarray(offset, offset + cidLength));
+      cid = decoder2.decode(archive.subarray(offset, offset + cidLength));
     } catch {
       archiveFailure("CID is not UTF-8");
     }
@@ -4129,6 +4350,10 @@ function contentBaseURL(input) {
   if (!url.pathname.endsWith("/"))
     url.pathname += "/";
   return url;
+}
+function archiveBytes(limits) {
+  const overhead = 2 + limits.maximumEntries * (2 + MAXIMUM_VOLUME_CID_BYTES + 4);
+  return Math.min(MAXIMUM_VOLUME_ARCHIVE_BYTES, overhead + limits.maximumBytes);
 }
 async function boundedBytes(response, maximumBytes) {
   const declared = response.headers.get("content-length");
@@ -4204,7 +4429,7 @@ var HTTPVolumeTransport = class {
     if (mediaType !== VOLUME_ARCHIVE_MEDIA_TYPE) {
       throw new VolumeTransportError(`content gateway returned ${mediaType ?? "no content type"}`, response.status);
     }
-    const archive = await boundedBytes(response, MAXIMUM_VOLUME_ARCHIVE_BYTES);
+    const archive = await boundedBytes(response, archiveBytes(this.#limits));
     return decodeVolumeArchive(rootCID, archive, this.#limits);
   }
   /**
@@ -4365,8 +4590,10 @@ export {
   decodeCanonicalBlock,
   decodeCanonicalLatticeState,
   decodeCanonicalSignedTransaction,
+  decodeChildBlockProof,
   decodeDagCbor,
   decodeEd25519Multikey,
+  decodeLatticeBlock,
   decodeVolumeArchive,
   decodeVolumeRecords,
   encodeDagCbor,
@@ -4381,6 +4608,8 @@ export {
   grind,
   hexToBytes,
   isPublicAddress,
+  isStandardCID,
+  isValidChildDirectory,
   nodeCookieAuthorization,
   normalizeNodeURL,
   parseAccount,
@@ -4408,6 +4637,7 @@ export {
   transactionWeight,
   utf8,
   verifyCID,
+  verifyChildBlockProof,
   verifyDagCborCID,
   verifyNexusBlockProofOfWork,
   verifyPreimage,
