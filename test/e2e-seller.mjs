@@ -1,7 +1,8 @@
-// End to end on a local network, for the seller: `hearth sell` paces the
-// market and the chain it sells with no miner running, pays those blocks to
-// its sponsor's key, runs lattice-sponsor beside the node (its terms bind it
-// to the offer), and `hearth stop` closes the offer while the seller keeps
+// End to end on a local network, for the seller: `hearth sell` with a key
+// that holds no coin paces the market and the chain it sells with no miner
+// running, pays those blocks to its sponsor's key, funds its first writes
+// from that key's block rewards, then runs lattice-sponsor beside the node
+// (its terms bind it to the offer); `hearth status` reports the order; and `hearth stop` closes the offer while the seller keeps
 // making the paid chain's blocks until its paid time ends, then exits.
 //
 //   LATTICE=<lattice-node>/.build/debug/lattice SPONSOR=<lattice-sponsor>/.build/debug/lattice-sponsor node test/e2e-seller.mjs
@@ -39,7 +40,8 @@ const authed = (u, init = {}) => fetch(u, { ...init, headers: { ...(init.headers
 const fragment = () => { try { return JSON.parse(readFileSync(join(root, "config.d/hostmarket.json"), "utf8")).hostedChains ?? []; } catch { return undefined; } };
 const configure = (change) => { const f = `${root}/lattice.json`, t = JSON.parse(readFileSync(f, "utf8")); change(t); writeFileSync(f, JSON.stringify(t, null, 2)); };
 const account = () => { const privateKey = sdk.generatePrivateKey(); return { privateKey, address: sdk.accountFromPrivateKey(privateKey).address }; };
-const [miner, host, buyer] = [account(), account(), account()];
+// `bank` holds the market's premine; the seller's key starts with nothing.
+const [miner, bank, buyer, host] = [account(), account(), account(), account()];
 const r = reader(sdk, node);
 const hearth = (...args) => new Promise((ok) => execFile(process.execPath, [join(ROOT, "bin/hearth.mjs"), ...args], { encoding: "utf8" }, (e, out, err) => ok({ code: e?.code ?? 0, out: out + err })));
 
@@ -71,16 +73,15 @@ try {
   configure((t) => { Object.assign(t, { listen: ports.listen, rpc: ports.rpc, publicRead: ports.publicRead, webSocket: 0, publicSubmit: true, minRelayFee: 1 });
     t.publicReadExpensiveRate = 1000; t.peers = []; });
   lattice("child", "create", "Nexus/testnet");
-  lattice("child", "create", MARKET, ...marketArgs({ dir: root, premineTo: host.address, overrides: { targetBlockTime: 3000 } }));
+  lattice("child", "create", MARKET, ...marketArgs({ dir: root, premineTo: bank.address, overrides: { targetBlockTime: 3000 } }));
   writeFileSync(join(root, "miner.json"), JSON.stringify({ worker: "cpu", workers: 1, batchSize: 100000, recipients: { Nexus: miner.address, "Nexus/testnet": miner.address, [MARKET]: miner.address } }));
   const log = openSync(join(root, "node.log"), "a");
   spawn(LATTICE, ["up", "--root", root], { stdio: ["ignore", log, log], detached: true }).unref();
   await until("the node", async () => existsSync(join(root, "chains/Nexus/.cookie")), 120);
   lattice("mine", "start");
   say("root", root);
-  await until("the market's genesis", async () => (await balance(MARKET, host.address)) > 0n);
-  // The buyer's coin, before the seller signs with the same key.
-  await send(host, async () => sdk.buildTransfer({ from: host.address, to: buyer.address, amount: 5000n, fee: 1n, nonce: await nonce(MARKET, host), chainPath: MARKET.split("/") }), "coin for the buyer");
+  await until("the market's genesis", async () => (await balance(MARKET, bank.address)) > 0n);
+  await send(bank, async () => sdk.buildTransfer({ from: bank.address, to: buyer.address, amount: 5000n, fee: 1n, nonce: await nonce(MARKET, bank), chainPath: MARKET.split("/") }), "coin for the buyer");
   await until("the buyer's coin", async () => (await balance(MARKET, buyer.address)) >= 5000n);
   lattice("mine", "stop");
   say("miner stopped at market height", await height(MARKET));
@@ -94,7 +95,7 @@ try {
     maxBlockSize: 100000, maxStateGrowth: 100000, minTargetBlockTime: 1000, maxNumberOfTransactionsPerBlock: 100, modules: "any" }));
   const out = openSync(join(root, "seller.log"), "a");
   seller = spawn(process.execPath, [join(ROOT, "bin/hearth.mjs"), "sell", "--offer", offerFile, "--root", root, "--market", MARKET, "--lattice", LATTICE,
-    "--sponsor-bin", SPONSOR, "--sponsor-port", String(ports.sponsor), "--interval", "2"], { stdio: ["ignore", out, out] });
+    "--sponsor-bin", SPONSOR, "--sponsor-port", String(ports.sponsor), "--interval", "2", "--storage-budget", "64M"], { stdio: ["ignore", out, out] });
   const sponsorKey = JSON.parse(await until("the sponsor's key", async () => readFileSync(join(root, "hearth/sponsor.json"), "utf8"), 60));
   assert.notEqual(sponsorKey.address, host.address);
   const m0 = await until("the offer", async () => { const m = await r.market(MARKET); return m.versions.has(`${host.address}/small`) && m; }, 300);
@@ -102,6 +103,12 @@ try {
   assert.equal(offer.blocks, sponsorKey.address, "the offer names the sponsor's key as where its blocks pay");
   assert.equal(offer.sponsor, undefined, "no --sponsor-url: no sponsor");
   assert.equal(offer.until - offer.created, 864000n, "30 days of 3-second blocks");
+  // Its fees came from the sponsor key's block rewards, moved before lattice-sponsor started.
+  const sellerLog = () => readFileSync(join(root, "seller.log"), "utf8");
+  assert.equal((await r.account(MARKET, host.address)).nonce > 0n, true);
+  assert.match(sellerLog(), /moving 4 market coin of the sponsor key's block rewards to the seller's key for its first writes/);
+  assert.ok(sellerLog().indexOf("moving 4 market coin") < sellerLog().indexOf("sponsor on 127.0.0.1"), "the move before lattice-sponsor starts");
+  assert.match(sellerLog(), /worst case, each chain sold adds up to 17\.3 GB a day .*51\.8 GB a day for all 3/);
   say("offer at", offer.created, "until", offer.until);
   const terms = await until("the sponsor's terms", async () => (await fetch(`http://127.0.0.1:${ports.sponsor}/terms`)).json(), 60);
   assert.equal(String(terms.storageRates[MARKET]), "10240");
@@ -127,6 +134,27 @@ try {
   await until("app1 launched (premine paid)", async () => (await balance("Nexus/testnet/app1", buyer.address)) > 0n, 600);
   await until("app1's blocks paid to the sponsor", async () => { const s = await checkServing({ reader: r, chain: "Nexus/testnet/app1", offer, targetBlockTime: 2000 }); return s.ok && s.live.ok; }, 120);
   say("app1 served, fragment", fragment());
+  const status = await until("hearth status after the order settled", async () => {
+    const s = await hearth("status", "--root", root, "--market", MARKET, "--lattice", LATTICE, "--sponsor-port", String(ports.sponsor));
+    return / and 0 renewals: earned 80 coin from buyers\n/.test(s.out) && s;
+  }, 120);
+  say("hearth status:\n" + status.out);
+  assert.equal(status.code, 0, status.out);
+  assert.match(status.out, new RegExp(`the seller's key ${host.address} holds \\d+; the sponsor's key ${sponsorKey.address} holds \\d+ \\(its block rewards\\)`));
+  assert.match(status.out, /1 orders \{"owed":1\}/);
+  assert.match(status.out, /owes hosting to Nexus\/testnet\/app1 \(to market block \d+\)/);
+  assert.match(status.out, /storage pinned by the sponsor: 0 B of its 64\.0 MiB budget, 0 B held for uploads being paid, 64\.0 MiB left/, "the budget as given, from the sponsor's /terms");
+  assert.match(status.out, /the seller runs \(pid \d+\)/);
+  assert.match(readFileSync(join(root, "seller.log"), "utf8"), /owes hosting to Nexus\/testnet\/app1/, "each pass reports it too");
+  // A takedown through the sponsor, with the node's cookie; the CID is refused from then on.
+  const CID = "bafyreigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
+  const down = await hearth("unpin", CID, "--root", root, "--sponsor-port", String(ports.sponsor));
+  say("hearth unpin:\n" + down.out);
+  assert.equal(down.code, 0, down.out);
+  assert.match(down.out, new RegExp(`took ${CID} down: the sponsor refuses it from now on`));
+  const stored = await fetch(`http://127.0.0.1:${ports.sponsor}/store`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ root: CID, volumes: [{ cid: CID, bytes: 10 }] }) });
+  assert.equal(stored.status, 451, "a blocked CID is refused");
 
   // ---- each chain at its own pace: the market every 3 s, app1 every 2 s ----
   await sleep(60_000);

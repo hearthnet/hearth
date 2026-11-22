@@ -5,23 +5,48 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { reader } from "../client/market.mjs";
-import { burnAddress, parentOf, parseOffer, pathFromNexus } from "../client/records.mjs";
+import { burnAddress, formatHostURL, formatStorageOffer, isHTTPS, isPath, offerText, parentOf, parseHostURL, parseOffer, parseStorageOffer, pathFromNexus } from "../client/records.mjs";
 import { submit } from "../client/tx.mjs";
 
 export const DEFAULT_MARKET = "Nexus/testnet/lodger-3129cc";
 export const DEFAULT_PARENT = "Nexus/testnet";
-/** README's example offer, less its price: what `--price` alone sells. */
-export const DEFAULT_TERMS = { capacity: 50, maxBlockSize: 1000000, maxStateGrowth: 1000000, minTargetBlockTime: 5000,
-  maxNumberOfTransactionsPerBlock: 1000, modules: "any" };
+/**
+ * What `--price` alone sells: small chains. A buyer's chain may fill every
+ * block, and the host keeps every block and the state they add, paid for by
+ * its own sponsor's fees, so these bound what one order can put on the
+ * host's disk: at most 2,880 blocks a day (30 s apart) of 20 kB, adding
+ * 10 kB of state each, about 86 MB a day per chain (`worstGrowth`), 864 MB
+ * a day for all 10. An offer file sells other limits.
+ */
+export const DEFAULT_TERMS = { capacity: 10, maxBlockSize: 20000, maxStateGrowth: 10000, minTargetBlockTime: 30000,
+  maxNumberOfTransactionsPerBlock: 100, modules: "any" };
+/**
+ * What `hearth sell` sells at with neither `--price` nor `--offer`: Hearth
+ * coin (the market's coin) per chain per day. The market pays 1,000 coin a
+ * block, a block a minute, 1,440,000 a day, shared by the sellers pacing
+ * it: with 10 of them each mints about 144,000 a day, and a full default
+ * offer (10 chains) earns 100,000 a day, so orders count beside the blocks.
+ */
+export const DEFAULT_PRICE = "10000/day";
+/** Why a host sells, as `hearth sell` says when it makes the seller's key. */
+export const WHY_SELL = "You earn Hearth coin (the market's coin): buyers' orders pay the seller's key, and the blocks it makes pay its sponsor's key "
+  + "(hearth sweep moves them to the seller's). Spend it on hosting or storage from any seller on the market.";
 /** How long an offer sells unless its file says (`duration`, in market blocks): 30 days. */
 export const DEFAULT_DURATION_MS = 30 * 86400 * 1000;
 /**
  * What the seller's sponsor charges for storage unless `--storage-rate`
- * says: bytes per market coin. Pins are kept for good, so it is the rate the
+ * says: bytes per market coin. Pins are kept until taken down, so it is the rate the
  * testnet's own storage sponsor charges on the market (10 KiB a coin: a
  * megabyte costs about a tenth of a market block's reward).
  */
 export const DEFAULT_STORAGE_RATE = 10240;
+/**
+ * The most bytes the seller's sponsor holds pinned at once unless
+ * `--storage-budget` says (lattice-sponsor's own default is 1 GiB): pins
+ * are kept until the operator takes them down (`hearth unpin`), and the host
+ * serves them from its IP.
+ */
+export const DEFAULT_STORAGE_BUDGET = 256 * 2 ** 20;
 /** The oldest node Hearth runs beside (`nodeVersion` checks what it brought, not this string). */
 export const MIN_NODE = "4.0.1";
 const depth = (path) => path.split("/").length;
@@ -74,6 +99,132 @@ export function fundingMessage({ address, need, interval }) {
     + `from any account that holds some, or earn it with this machine: hearth earn; this seller waits and checks again every ${interval} s.`;
 }
 
+/**
+ * How the seller's key gets the fees of its first writes (offer, url,
+ * storage offer: `3 * fee`), from the balances on the market:
+ * `{ ready: true }` once it holds them; else, when it may (`canMove`: no
+ * lattice-sponsor signs with the sponsor's key yet), `{ move }`, the coin
+ * to move from the sponsor key's block rewards (enough for a close too:
+ * `4 * fee`), once it holds that and the move's own fee; else `{ wait }`,
+ * what to tell the operator. `otherSponsor`: the port where a
+ * lattice-sponsor already answers, which might sign with the same key, so
+ * nothing is moved.
+ */
+export function fundingStep({ fee, seller, sponsor, canMove, otherSponsor, chain, address, interval }) {
+  if (seller >= 3n * fee) return { ready: true };
+  const move = 4n * fee - seller;
+  const send = `send ${3n * fee - seller} coin on ${chain} to ${address}, or earn it with this machine: hearth earn`;
+  if (canMove && otherSponsor !== undefined) {
+    return { wait: `a lattice-sponsor already answers on port ${otherSponsor} and may sign with the sponsor's key, so the seller moves nothing from it: `
+      + `stop that sponsor, or ${send}. Checking again every ${interval} s.` };
+  }
+  if (canMove && sponsor >= move + fee) return { move };
+  return { wait: canMove
+    ? `the seller's key holds ${seller} of the ${3n * fee} market coin its first writes cost: waiting for block rewards. `
+      + `This seller's blocks pay the sponsor's key (it holds ${sponsor}), and the seller moves ${move} from it once it holds ${move + fee}. `
+      + `Not to wait, ${send}. Checking again every ${interval} s.`
+    : fundingMessage({ address, need: { chain, amount: 3n * fee, balance: seller }, interval })
+      + " The sponsor's key holds the block rewards: hearth sweep moves them here while no lattice-sponsor signs with it." };
+}
+
+const SIZE_UNITS = { "": 1, k: 2 ** 10, m: 2 ** 20, g: 2 ** 30, t: 2 ** 40 };
+
+/** `<n>[K|M|G|T]` (binary; `256M`, `1GiB`, `1G`, `500000`): bytes. */
+export function parseSize(text, flag) {
+  const match = /^([1-9][0-9]*)\s*([kmgt]?)(?:i?b)?$/i.exec(text ?? "");
+  const bytes = match && Number(match[1]) * SIZE_UNITS[match[2].toLowerCase()];
+  if (!match || !Number.isSafeInteger(bytes)) throw new Error(`${flag} is a size, bytes or with K, M, G or T (e.g. 256M, 1G), not ${text}`);
+  return bytes;
+}
+
+/** Bytes as people read them: `86.4 MB`, `2.0 GiB` binary when `binary`. */
+export function formatBytes(bytes, binary = false) {
+  const base = binary ? 1024 : 1000, units = binary ? ["B", "KiB", "MiB", "GiB", "TiB"] : ["B", "kB", "MB", "GB", "TB"];
+  let n = Number(bytes), i = 0;
+  while (n >= base && i < units.length - 1) { n /= base; i++; }
+  return `${i ? n.toFixed(1) : n} ${units[i]}`;
+}
+
+/**
+ * The most an offer's chains can add to the host's disk in a day, if every
+ * block comes `minTargetBlockTime` apart, full (`maxBlockSize`), and adds
+ * `maxStateGrowth` of state: `{ blocks, perChain, all }`, `all` for its
+ * whole `capacity`. Blocks faster than the target harden a chain, so a
+ * buyer cannot get many more.
+ */
+export function worstGrowth(terms) {
+  const blocks = Math.floor(86_400_000 / Number(terms.minTargetBlockTime));
+  const perChain = blocks * (Number(terms.maxBlockSize) + Number(terms.maxStateGrowth));
+  return { blocks, perChain, all: perChain * Number(terms.capacity) };
+}
+
+/** `worstGrowth` as the seller prints it. */
+export function growthLine(terms) {
+  const { blocks, perChain, all } = worstGrowth(terms);
+  return `worst case, each chain sold adds up to ${formatBytes(perChain)} a day to this node's disk (${blocks} blocks of ${formatBytes(terms.maxBlockSize)}, `
+    + `each adding ${formatBytes(terms.maxStateGrowth)} of state), ${formatBytes(all)} a day for all ${terms.capacity}; an offer file (--offer) sells other limits`;
+}
+
+/**
+ * The storage offer a `--storage-offer` file makes at market `height`, as
+ * the seller writes it (`{ id, value }`); an error naming what is wrong.
+ */
+export function storageOfferFrom(file, height) {
+  const offer = { sponsor: file.sponsor, bytesPerCoin: BigInt(file.bytesPerCoin ?? 0), capacity: BigInt(file.capacity ?? 0),
+    until: file.until !== undefined ? BigInt(file.until) : height + BigInt(file.duration ?? 525600) };
+  const value = formatStorageOffer(offer);
+  if (!file.id || !parseStorageOffer(offerText(height, value))) {
+    throw new Error("the storage offer file does not make a valid storage offer (it needs an id, an https sponsor, bytesPerCoin and capacity above 0)");
+  }
+  return { id: file.id, value };
+}
+
+/**
+ * Every `hearth sell` flag checked, before anything is written: an error
+ * naming the first bad one.
+ */
+export function checkSellFlags(a) {
+  if (a.price && a.offer) throw new Error("give --price (the offer from flags) or --offer offer.json, not both");
+  if (a.offer && !existsSync(a.offer)) throw new Error(`no offer file at ${a.offer}`);
+  if (a.offer) {
+    let o;
+    try { o = JSON.parse(readFileSync(a.offer, "utf8")); } catch (e) { throw new Error(`the offer file ${a.offer} is not JSON: ${e.message}`); }
+    for (const k of ["capacity", "maxBlockSize", "maxStateGrowth", "minTargetBlockTime"]) if (!(Number(o[k]) > 0)) throw new Error(`the offer file ${a.offer} has no ${k}`);
+  }
+  if (a.parent !== undefined && !(isPath(a.parent) && (a.parent === "Nexus" || a.parent.startsWith("Nexus/")))) {
+    throw new Error(`--parent is a chain path from Nexus, e.g. Nexus/testnet, not ${a.parent}`);
+  }
+  const offerId = a.price ? offerFromFlags({ price: a.price, parent: a.parent, chains: a.chains, id: a.id }).id : undefined;
+  if (a["burn-chain"] && !a.burn) throw new Error("--burn-chain goes with --burn");
+  if (a.burn) { parseAmount(a.burn, "--burn"); burnChain(a["burn-chain"] ?? a.market, a.market); }
+  if (a.fee !== undefined) parseAmount(a.fee, "--fee");
+  if (!/^[1-9][0-9]*$/.test(a.interval ?? "")) throw new Error(`--interval is whole seconds, at least 1, not ${a.interval}`);
+  for (const flag of ["sponsor-port"]) if (a[flag] !== undefined && !(/^[1-9][0-9]*$/.test(a[flag]) && Number(a[flag]) < 65536)) throw new Error(`--${flag} is a port, 1 to 65535, not ${a[flag]}`);
+  if (a["storage-rate"] !== undefined && !/^[1-9][0-9]*$/.test(a["storage-rate"])) throw new Error(`--storage-rate is bytes per market coin, a whole number, not ${a["storage-rate"]}`);
+  if (a["storage-budget"] !== undefined) parseSize(a["storage-budget"], "--storage-budget");
+  if (a["sponsor-url"] !== undefined && !isHTTPS(a["sponsor-url"])) throw new Error(`--sponsor-url is the sponsor's public https URL, not ${a["sponsor-url"]}`);
+  if (a.url !== undefined && !parseHostURL(formatHostURL(a.url, a.proof))) throw new Error(`--url is an https URL (and --proof one on its hostname), not ${a.url}`);
+  if (a["storage-offer"]) {
+    if (!existsSync(a["storage-offer"])) throw new Error(`no storage offer file at ${a["storage-offer"]}`);
+    let file;
+    try { file = JSON.parse(readFileSync(a["storage-offer"], "utf8")); } catch (e) { throw new Error(`the storage offer file ${a["storage-offer"]} is not JSON: ${e.message}`); }
+    try { storageOfferFrom(file, 0n); } catch (e) { throw new Error(`${a["storage-offer"]}: ${e.message}`); }
+    if (file.id === (offerId ?? a.id)) throw new Error("the storage offer needs an id of its own, not the hosting offer's");
+  }
+}
+
+/**
+ * `--root`, when it is one: an error unless a Lattice node lives there
+ * (`lattice init`'s lattice.json, or a bare lattice-node's chains/Nexus),
+ * running or not.
+ */
+export function checkRoot(root) {
+  if (!existsSync(join(root, "lattice.json")) && !existsSync(join(root, "chains/Nexus"))) {
+    throw new Error(`no Lattice node at ${root}: give the root of one (lattice init --root <dir>, then lattice up --root <dir>), or --node with --token-file`);
+  }
+  return root;
+}
+
 const UNITS = { hour: 3600, day: 86400, week: 604800 };
 
 /**
@@ -93,7 +244,7 @@ export function findRoot({ cwd, home }) {
 export function parsePrice(text) {
   const match = /^([1-9][0-9]*)\/([1-9][0-9]*|hour|day|week)$/.exec(text ?? "");
   if (match && [match[1], match[2]].some((n) => /^[0-9]/.test(n) && BigInt(n) > BigInt(Number.MAX_SAFE_INTEGER))) throw new Error(`--price ${text} is past ${Number.MAX_SAFE_INTEGER}`);
-  if (!match) throw new Error(`--price is <coin>/<period>, the period in market blocks or hour, day or week (e.g. 100/day), not ${text}`);
+  if (!match) throw new Error(`--price is <coin>/<period>, the period in market blocks or hour, day or week (e.g. 10000/day), not ${text}`);
   return { price: BigInt(match[1]), period: /^[0-9]/.test(match[2]) ? BigInt(match[2]) : match[2] };
 }
 

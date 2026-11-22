@@ -17,12 +17,16 @@ and probes each host from your browser.
 
 ## Sell hosting in one command
 
+Why host: to earn Hearth coin (the market's coin), which pays for hosting
+and storage from any seller. Buyers' orders pay the seller's key; the
+blocks it makes pay its sponsor's key, 1,000 coin a market block.
+
 You need a running Lattice node, **4.0.1 or newer** (`lattice up`),
 lattice-sponsor on your `PATH` (see <https://lattice.build/docs/> for where
 to get it, or give `--sponsor-bin`), and Node.js 22 or later. In the node's root (or with `--root`):
 
 ```
-npx @hearthnet/hearth sell --price 100/day
+npx @hearthnet/hearth sell                  # 10000 Hearth coin a day per chain; --price to choose
 ```
 
 **The first sync of testnet takes about 1–2 hours and ~1.5 GB.** Until the
@@ -40,16 +44,53 @@ needs Lattice 4.0.1 or newer (you have X: ...)" beside an older one, X as
 `<root>/hearth/seller.json` (mode 0600; it prints the address, never the
 key, and refuses a key file others can read) unless there is one, has the
 node host the market (`Nexus/testnet/lodger-3129cc`) and the offer's parent
-(`--parent`, default `Nexus/testnet`), writes the offer (100 market coin per
-day, converted to market blocks at the market's block time; `--chains 50`
-and the example offer's limits below unless given), then sells in the
-foreground. `--price` takes `<coin>/<blocks>` or `/hour`, `/day`, `/week`;
+(`--parent`, default `Nexus/testnet`), writes the offer (10,000 market coin
+per day unless `--price` says, converted to market blocks at the market's block time; `--chains 10`
+and small chains' limits unless given: see *Default limits*), then sells in
+the foreground. A bad flag, or a `--root` where no Lattice node lives ("no
+Lattice node at <root>"), stops it before it writes anything. Every verb
+takes `--help`. `--price` takes `<coin>/<blocks>` or `/hour`, `/day`, `/week`;
 `--offer offer.json` still works instead.
 
+**Default price.** 10,000 coin per chain per day. The market pays 1,000
+coin a block, a block a minute: 1,440,000 a day, shared by the sellers
+pacing it. With 10 sellers each mints about 144,000 a day, and a full
+default offer (10 chains) earns 100,000 a day, so orders count beside the
+blocks. `--price` sets another.
+
+**Default limits.** `--price` alone sells chains with blocks at least 30 s
+apart (`minTargetBlockTime 30000`), of at most 20 kB (`maxBlockSize`), each
+adding at most 10 kB of state (`maxStateGrowth`), 100 transactions a block,
+10 chains. A buyer's chain may fill every block, the host keeps them all,
+and its own sponsor pays the fees, so at worst each chain sold adds about
+86 MB a day to the node's disk, 864 MB a day for all 10. The offer format
+has no cap on a chain's total state, so this rate is the bound. The seller
+prints the worst case for the terms it sells; an offer file (`--offer`) sells
+other limits.
+
 **Funding.** Before it writes, the key needs market coin for its writes (the
-offer, url and storage offer). Until it holds it, the seller says how much to
-send to its address from any account that holds some, or to earn it with
-`hearth earn` (below), and checks again each `--interval`.
+offer, url and storage offer: three fees). The pacer pays the sponsor's key
+the market's blocks, so beside the node the seller moves the fees of its
+first writes (four, for a close too) from the sponsor's key to its own
+before it starts lattice-sponsor, so nothing else signs with that key. It
+waits until that key holds five fees (the four it moves and the move's own
+fee); until then it says it waits for block rewards, or that you may send
+the coin or earn it with `hearth earn` (below), and checks again each
+`--interval`. It moves nothing if any lattice-sponsor already answers on
+`--sponsor-port` (it could sign with the same key), and says so. With
+`--node`, or once an offer is out, it only says what to send, earn or
+sweep.
+
+**Status.** Each pass prints both keys' balances on the market, the
+seller's orders (by verdict) and renewals, the coin other buyers paid for
+hosting it owes or owed (`earned`: settled orders judged owed, and settled
+renewals of those chains that bought time; void, full and taken orders and
+the seller's own count in neither; `settling`: not settled yet), the
+chains it owes hosting to and until which market block, and the storage its
+sponsor has pinned against its budget (its `GET /terms`; not read with
+`--node`, whose sponsor runs beside the remote node). `hearth status`
+prints the same once, with a deadline on every read: it never waits for a
+sync, and says `market not synced (height X of Y)` instead.
 
 **Blocks.** The seller makes the blocks of the market and of every chain it
 hosts for its orders (`host/pace.mjs`), always: there is no flag. A chain is
@@ -77,17 +118,25 @@ transactions it signed and any fund deposits (lattice-sponsor's
 `lattice-sponsor-holds.json` and `lattice-sponsor-funds.json`). It signs
 with the sponsor's key, so it refuses while the seller or any
 lattice-sponsor on `--sponsor-port` runs, and while a transaction the
-sponsor signed there has yet to land.
+sponsor signed there has yet to land; it says how to pause the seller (its
+service, or the process) without `hearth stop`, which would close the
+offers.
 
 **Sponsor.** Beside the node the seller runs lattice-sponsor, and starts it
 again, with backoff, whenever it exits. Its key is
 `<root>/hearth/sponsor.json` (mode 0600), never the seller's: a co-signature
 lends the key's authority to a draft, so it must own nothing but its float,
 which the pacer's blocks pay. It pays fees for clients who pay with
-proof-of-work shares, and sells permanent pins for work at `--storage-rate`
+proof-of-work shares, and sells pins for work at `--storage-rate`
 bytes per market coin (default 10240, what testnet's own storage sponsor
-charges on the market: pins are kept for good, so a megabyte costs about a
-tenth of a market block's reward), on `--sponsor-port` (default 8650).
+charges on the market: pins are kept until the operator takes them down, so a megabyte costs about a
+tenth of a market block's reward), up to `--storage-budget` bytes pinned at once
+(`256M` by default; `K`, `M`, `G`, `T` are binary), on `--sponsor-port`
+(default 8650). Pins are served from the node's IP. `hearth unpin <cid>`
+takes a file down: the sponsor's `POST /takedown`, with the node's cookie,
+unpins it, frees its bytes and refuses the CID from then on; its buyer loses
+the rest of its time, with no refund (it needs a lattice-sponsor with the
+takedown route).
 Without `--sponsor-url` it listens on loopback only and the offer names no
 sponsor, which the app shows buyers. With
 `--sponsor-url https://host.example/sponsor` it listens on every interface
@@ -228,7 +277,7 @@ burn costs whoever made it; it says nothing about how a host serves.
 
 ```
 npx @hearthnet/hearth burn 300 --chain Nexus/testnet      # burns 300 now, from the seller's key
-npx @hearthnet/hearth sell --price 100/day --burn 5000     # burns once, up to 5000 burned on the market
+npx @hearthnet/hearth sell --burn 5000                     # burns once, up to 5000 burned on the market
 ```
 
 `hearth burn <coin> --chain <path>` sends a transfer from the seller's key to
@@ -293,7 +342,7 @@ sponsor (`POST /store`), then orders it at every host in one transaction: one
 `order/<host>/<id>/<payer>/<height>/<paid>/<root CID>` each, valued
 `bytes <n>` (the size the sponsor counted), paying each host. It claims the
 payment at each sponsor (`POST /pay`, naming the root), which pins the file
-for good. A storage order is owed once settled if it paid for its bytes and
+until the host takes it down. A storage order is owed once settled if it paid for its bytes and
 fits in what the offer has left; `judgeStorage` in `client/verdict.mjs`.
 Storing at several hosts is how a file outlives any one of them.
 `tools/store.mjs` does all of this for one file.
@@ -373,9 +422,9 @@ node nearly as fully as `admin` does anyway.
 `duration` in market blocks, 30 days when absent):
 
 ```json
-{ "id": "small", "parent": "Nexus/testnet", "price": 100, "period": 1440, "duration": 43200,
-  "capacity": 50, "maxBlockSize": 1000000, "maxStateGrowth": 1000000, "minTargetBlockTime": 5000,
-  "maxNumberOfTransactionsPerBlock": 1000, "modules": "any" }
+{ "id": "small", "parent": "Nexus/testnet", "price": 10000, "period": 1440, "duration": 43200,
+  "capacity": 10, "maxBlockSize": 20000, "maxStateGrowth": 10000, "minTargetBlockTime": 30000,
+  "maxNumberOfTransactionsPerBlock": 100, "modules": "any" }
 ```
 
 Sellers keep coin on sale with `tools/sell.mjs`.
@@ -404,6 +453,7 @@ LATTICE=<lattice-node>/.build/debug/lattice SPONSOR=<lattice-sponsor>/.build/deb
 `test/devnet.mjs` runs a local market to work on the page against. The
 devnet scripts (`test/devnet.mjs`, `test/e2e.mjs`, `test/e2e-commit.mjs`)
 run the seller with lattice-sponsor from `PATH`, or from `SPONSOR=<path>`
-when it is set; `test/e2e-seller.mjs` needs `SPONSOR`, and a lattice-node
+when it is set; `test/e2e-seller.mjs` needs `SPONSOR` (a lattice-sponsor
+with `POST /takedown` and `storage` in `/terms`), and a lattice-node
 whose template requests take `exclude` (its check that no paced chain gets
 a block before its tip is a target block time old fails without it).
