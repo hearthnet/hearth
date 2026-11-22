@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Hearth's seller in one command:
 //
-//   npx @hearthnet/hearth sell --price 100/day
+//   npx @hearthnet/hearth sell [--price 10000/day]
 //
 // finds the Lattice node beside it (4.0.1 or newer), makes the seller's key
 // if there is none, writes the offer from its flags, and runs
@@ -22,6 +22,15 @@
 //
 // moves what the sponsor's key holds above the float to the seller's address.
 //
+//   npx @hearthnet/hearth status
+//
+// prints, once, what the seller prints each pass: both keys' balances, its
+// orders, what they paid and what it owes, and the storage pinned.
+//
+//   npx @hearthnet/hearth unpin <cid>
+//
+// asks the seller's sponsor to unpin a file and serve it no more.
+//
 //   npx @hearthnet/hearth earn [--until <coins>]
 //
 // earns market coin for the seller's key with this machine's processor.
@@ -39,9 +48,12 @@ import * as sdk from "../vendor/lattice-sdk.js";
 import { keyFileJSON } from "../client/tx.mjs";
 import { reader } from "../client/market.mjs";
 import { CREATED_WINDOW } from "../client/records.mjs";
-import { DEFAULT_MARKET, DEFAULT_STORAGE_RATE, authedFetch, burn, burnChain, chainSync, ensureKey, findRoot, installedSeller, nodeSecret, nodeVersion, offerFromFlags,
-  markClosing, markReopen, onPath, sponsorBooks, operatorRPC, parseAmount, rpcPort, sellerFiles, serviceUnits, sweep, waitSynced } from "../host/hearth.mjs";
-import { sponsorBinary } from "../host/sponsor.mjs";
+import { DEFAULT_MARKET, DEFAULT_PRICE, WHY_SELL, DEFAULT_STORAGE_RATE, authedFetch, burn, burnChain, chainSync, checkRoot, checkSellFlags, ensureKey, findRoot,
+  installedSeller, nodeSecret, nodeVersion, offerFromFlags, markClosing, markReopen, onPath, sponsorBooks, operatorRPC, parseAmount, rpcPort,
+  sellerFiles, serviceUnits, sweep, waitSynced } from "../host/hearth.mjs";
+import { sponsorBinary, sponsorStorage, unpin } from "../host/sponsor.mjs";
+import { judgeOwn, report } from "../host/status.mjs";
+import { isRootCID } from "../client/records.mjs";
 import { stop } from "../host/stop.mjs";
 import { pacer } from "../host/pace.mjs";
 import { DEFAULT_SPONSOR, earn } from "../host/earn.mjs";
@@ -49,30 +61,37 @@ import { DEFAULT_SPONSOR, earn } from "../host/earn.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const { name, version } = JSON.parse(readFileSync(join(HERE, "../package.json"), "utf8"));
 const NODE = "[--root <node root> | --node <url> --token-file <file>] [--key <file>] [--lattice lattice]";
-const USAGE = `usage: hearth sell --price <coin>/<period> [--parent Nexus/testnet] [--chains 50]
+const VERBS = {
+  sell: `hearth sell [--price ${DEFAULT_PRICE}] [--parent Nexus/testnet] [--chains 10]
                    [--url https://host.example [--proof <url>]] [--market ${DEFAULT_MARKET}]
                    ${NODE} [--offer offer.json]
                    [--id <offer id>] [--storage-offer storage.json] [--interval 30] [--fee <n>] [--once]
                    [--sponsor-bin lattice-sponsor] [--sponsor-port 8650] [--sponsor-url <https url>]
-                   [--storage-rate ${DEFAULT_STORAGE_RATE}] [--burn <coin> [--burn-chain <path>]] [--install] [--resume]
-       hearth stop [--now] [--market ${DEFAULT_MARKET}] ${NODE} [--fee <n>]
-       hearth sweep [--float 100] [--chain <path>] [--sponsor-port 8650] [--market ${DEFAULT_MARKET}] ${NODE} [--fee <n>]
-       hearth earn [--until <coins>] [--workers 1] [--sponsor ${DEFAULT_SPONSOR}]
-                   [--market ${DEFAULT_MARKET}] ${NODE}
-       hearth burn <coin> --chain <path> [--market ${DEFAULT_MARKET}] ${NODE} [--fee <n>]`;
+                   [--storage-rate ${DEFAULT_STORAGE_RATE}] [--storage-budget 256M]
+                   [--burn <coin> [--burn-chain <path>]] [--install] [--resume]`,
+  status: `hearth status [--market ${DEFAULT_MARKET}] ${NODE} [--sponsor-port 8650]`,
+  stop: `hearth stop [--now] [--market ${DEFAULT_MARKET}] ${NODE} [--fee <n>]`,
+  unpin: "hearth unpin <cid> [--root <node root>] [--sponsor-port 8650]",
+  sweep: `hearth sweep [--float 100] [--chain <path>] [--sponsor-port 8650] [--market ${DEFAULT_MARKET}] ${NODE} [--fee <n>]`,
+  earn: `hearth earn [--until <coins>] [--workers 1] [--sponsor ${DEFAULT_SPONSOR}]
+                   [--market ${DEFAULT_MARKET}] ${NODE}`,
+  burn: `hearth burn <coin> --chain <path> [--market ${DEFAULT_MARKET}] ${NODE} [--fee <n>]`,
+};
+const USAGE = `usage: ${Object.values(VERBS).join("\n       ")}`;
 
 const [verb, ...rest] = process.argv.slice(2);
-if (!["sell", "stop", "earn", "burn", "sweep"].includes(verb)) { console.error(USAGE); process.exit(verb === undefined || verb === "help" || verb === "--help" ? 0 : 2); }
+if (!(verb in VERBS)) { console.error(USAGE); process.exit(verb === undefined || verb === "help" || verb === "--help" || verb === "-h" ? 0 : 2); }
+if (rest.includes("--help") || rest.includes("-h")) { console.log(`usage: ${VERBS[verb]}\nSee https://hearthnet.github.io/cli.html`); process.exit(0); }
 const fail = (message) => { console.error(`hearth: ${message}`); process.exit(2); };
 let parsed;
 try { parsed = parseArgs({
   args: rest,
-  allowPositionals: verb === "burn",
+  allowPositionals: verb === "burn" || verb === "unpin",
   options: {
     root: { type: "string" }, node: { type: "string" }, "token-file": { type: "string" },
     market: { type: "string", default: DEFAULT_MARKET }, key: { type: "string" }, offer: { type: "string" },
     id: { type: "string" }, url: { type: "string" }, proof: { type: "string" }, "storage-offer": { type: "string" },
-    lattice: { type: "string", default: "lattice" }, interval: { type: "string", default: "30" }, once: { type: "boolean", default: false }, fee: { type: "string" },
+    lattice: { type: "string", default: "lattice" }, interval: { type: "string", default: "30" }, "storage-budget": { type: "string" }, once: { type: "boolean", default: false }, fee: { type: "string" },
     price: { type: "string" }, parent: { type: "string" }, chains: { type: "string" },
     install: { type: "boolean", default: false }, resume: { type: "boolean", default: false }, float: { type: "string", default: "100" },
     burn: { type: "string" }, "burn-chain": { type: "string" }, chain: { type: "string" },
@@ -84,9 +103,12 @@ try { parsed = parseArgs({
 const { values: a, positionals } = parsed;
 if (a.node && !a["token-file"]) fail("--node needs --token-file");
 
+/** The node's root: none with --node, else --root (where a node must be), else found beside this process. */
+const nodeRoot = () => (a.node ? undefined : a.root ? checkRoot(resolve(a.root)) : findRoot({ cwd: process.cwd(), home: homedir() }));
+
 /** The node (beside it, or remote), its secret, and the seller's key path. */
 async function located() {
-  const root = a.node ? undefined : a.root ? resolve(a.root) : findRoot({ cwd: process.cwd(), home: homedir() });
+  const root = nodeRoot();
   const key = resolve(a.key ?? join(root ?? process.cwd(), "hearth/seller.json"));
   const fetchImpl = authedFetch(() => nodeSecret({ root, tokenFile: a.node && a["token-file"] }));
   const node = a.node ?? `http://127.0.0.1:${await rpcPort(root, a.lattice, fetchImpl)}`;
@@ -129,7 +151,13 @@ if (verb === "sweep") {
     if (!existsSync(sponsorKey)) fail(`no sponsor key at ${sponsorKey}`);
     // lattice-sponsor signs with the same key: two signers would race for its nonces.
     const pid = runningSeller(sellerFiles({ root, key }).pid);
-    if (pid) fail(`the seller (pid ${pid}) runs lattice-sponsor with this key: sweep once it has stopped (hearth stop --now, or stop its service)`);
+    // How to pause the seller without closing its offers (`hearth stop` closes them).
+    const service = installedSeller({ platform: process.platform, home: homedir() });
+    const pause = service ? `stop its service (${process.platform === "darwin" ? `launchctl bootout gui/$(id -u)/net.hearth.seller` : "systemctl --user stop hearth.service"}), `
+      + `run hearth sweep, then start it again (${process.platform === "darwin" ? `launchctl bootstrap gui/$(id -u) ${service.file}` : "systemctl --user start hearth.service"})`
+      : "stop it (Ctrl-C, or kill its pid), run hearth sweep, then start it again with the same hearth sell flags and --resume";
+    if (pid) fail(`the seller (pid ${pid}) runs lattice-sponsor with the sponsor's key, and two signers would race for its nonces: ${pause}. `
+      + "Its offers stay on sale meanwhile (hearth stop would close them). The seller funds its first writes from the sponsor's key by itself.");
     const port = a["sponsor-port"] ?? "8650";
     const answered = await fetch(`http://127.0.0.1:${port}/terms`, { signal: AbortSignal.timeout(2000) }).then((r) => r.ok, () => false);
     if (answered) fail(`a lattice-sponsor answers on port ${port}: stop it before sweeping its key (it signs with the same key), or give --sponsor-port`);
@@ -141,6 +169,46 @@ if (verb === "sweep") {
     const done = await sweep({ sdk, node, fetchImpl, privateKey: readKey(sponsorKey), to, chain, float, fee: a.fee, holds, funds });
     console.log(done ? `moved ${done.amount} of the sponsor's ${done.balance} on ${chain} to ${to}, keeping ${done.reserve} (the float ${float}, its holds and fund deposits): ${done.tx}`
       : `the sponsor's key holds no more than the float ${float}, its holds and fund deposits on ${chain} (with the fee): nothing to move`);
+  } catch (e) { fail(e.message); }
+  process.exit(0);
+}
+
+if (verb === "status") {
+  try {
+    const { root, key, node, fetchImpl } = await located();
+    const self = sdk.accountFromPrivateKey(readKey(key)).address;
+    const sponsorKey = join(dirname(key), "sponsor.json");
+    if (!existsSync(sponsorKey)) fail(`no sponsor key at ${sponsorKey}: hearth sell makes it`);
+    const sponsorAddress = JSON.parse(readFileSync(sponsorKey, "utf8")).address;
+    await nodeVersion(node, fetchImpl);
+    await waitSynced(node, a.market, { fetchImpl, label: "market" });
+    const n = reader(sdk, node, { fetchImpl });
+    const m = await n.market(a.market);
+    const { status } = (await operatorRPC(node, fetchImpl)("/config")).body;
+    const hosted = new Set((status.chains ?? []).filter((c) => c.actual === "hosted").map((c) => c.path));
+    const own = await judgeOwn({ sdk, n, m, self, hosted });
+    const [seller, sponsor] = await Promise.all([n.account(a.market, self), n.account(a.market, sponsorAddress)]);
+    console.log(report({ market: a.market, height: m.height, seller: { address: self, balance: seller.balance }, sponsor: { address: sponsorAddress, balance: sponsor.balance },
+      ...own, storage: await sponsorStorage(a["sponsor-port"] ?? "8650") }).join("\n"));
+    const pid = root && runningSeller(sellerFiles({ root, key }).pid);
+    if (root) console.log(pid ? `the seller runs (pid ${pid})${existsSync(sellerFiles({ root, key }).closing) ? ", closing" : ""}` : "no seller runs beside this node");
+  } catch (e) { fail(e.message); }
+  process.exit(0);
+}
+
+if (verb === "unpin") {
+  try {
+    if (positionals.length !== 1) fail("hearth unpin <cid>: the root CID of the file to unpin");
+    const [cid] = positionals;
+    if (!isRootCID(cid)) fail(`${cid} is not a CID (bafy...): give the root CID of the file to unpin`);
+    const port = a["sponsor-port"] ?? "8650";
+    if (!/^[1-9][0-9]*$/.test(port)) fail(`--sponsor-port is a port, not ${port}`);
+    // The sponsor takes the node's cookie as the operator's credential.
+    const root = nodeRoot();
+    if (!root) fail("hearth unpin runs beside the node (--root): its sponsor takes the node's cookie");
+    const done = await unpin({ port, cid, cookie: readFileSync(join(root, "chains/Nexus/.cookie"), "utf8").trim() });
+    console.log(`took ${done.cid} down: the sponsor refuses it from now on, and unpinned ${done.unpinned.length} Volumes (${done.unpinned.join(" ") || "none were pinned"}). `
+      + "Whoever paid for it loses the rest of its time, with no refund.");
   } catch (e) { fail(e.message); }
   process.exit(0);
 }
@@ -223,16 +291,17 @@ if (verb === "earn") {
   process.exit(0);
 }
 
-if (!a.price === !a.offer) fail("give --price (the offer from flags) or --offer offer.json");
-if (a["burn-chain"] && !a.burn) fail("--burn-chain goes with --burn");
-
 try {
+  // Every flag checked, and the node found, before anything is written.
+  if (!a.price && !a.offer) a.price = DEFAULT_PRICE;
+  checkSellFlags(a);
   // The node: remote with --node, else its root.
-  const root = a.node ? undefined : a.root ? resolve(a.root) : findRoot({ cwd: process.cwd(), home: homedir() });
+  const root = nodeRoot();
+  if (root) sponsorBinary(a["sponsor-bin"]);
   const key = resolve(a.key ?? join(root ?? process.cwd(), "hearth/seller.json"));
   const { address, created } = ensureKey(sdk, key, keyFileJSON);
   console.log(`${created ? "made the seller's key" : "seller key"} ${key}\naddress ${address}`);
-  if (root) sponsorBinary(a["sponsor-bin"]);
+  if (created) console.log(WHY_SELL);
 
   // The offer: its file, or one written beside the key from the flags.
   let offerPath = a.offer && resolve(a.offer);
@@ -245,7 +314,6 @@ try {
     console.log(`offer ${offer.id}: ${offer.price} coin per ${offer.period}, ${offer.capacity} chains under ${offer.parent}${a.url ? `, at ${a.url}` : ", key only (no --url)"}`);
   }
   if (a.burn) {
-    parseAmount(a.burn, "--burn");
     console.log(`burns until ${a.burn} is burned for ${address} on ${burnChain(a["burn-chain"] ?? a.market, a.market)}, once`);
   }
 
@@ -254,7 +322,7 @@ try {
   const sponsorBin = a["sponsor-bin"]?.includes("/") ? ["--sponsor-bin", resolve(a["sponsor-bin"])] : pass("sponsor-bin");
   const sellArgs = [...where, "--market", a.market, "--key", key, "--offer", offerPath,
     ...pass("url"), ...pass("proof"), ...pass("fee"), ...pass("burn"), ...pass("burn-chain"), ...(a["storage-offer"] ? ["--storage-offer", resolve(a["storage-offer"])] : []),
-    ...sponsorBin, ...pass("sponsor-port"), ...pass("sponsor-url"), ...pass("storage-rate"),
+    ...sponsorBin, ...pass("sponsor-port"), ...pass("sponsor-url"), ...pass("storage-rate"), ...pass("storage-budget"),
     "--interval", a.interval, ...(a.once ? ["--once"] : []), ...(a.resume ? ["--resume"] : [])];
 
   if (a.install) {

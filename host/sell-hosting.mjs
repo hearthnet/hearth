@@ -14,11 +14,14 @@
 // pass waits until the node has synced the market (`syncing market: h / H`)
 // before it reads anything there, funds, writes or burns.
 //
-// It writes its offer and url (once its key holds the fee; until then it
-// says how to fund it, or to earn it with `hearth earn`, and checks again
-// each pass), then each pass, at the market's tip, reads its own orders,
-// judges them as every reader does (client/verdict.mjs) and lists exactly
-// the chains it owes in its own fragment of the node's configuration,
+// It writes its offer and url once its key holds their fees. Beside the
+// node, until it does, the seller moves them from the sponsor key's block
+// rewards (which its own blocks pay) before it starts lattice-sponsor, so
+// nothing else signs with that key; until that key holds enough, it says it
+// waits for them, or how to send or earn the coin. Then each pass, at the
+// market's tip, it reads its own orders, judges them as every reader does
+// (client/verdict.mjs) and lists exactly the chains it owes in its own
+// fragment of the node's configuration,
 // `hostmarket` (config.d/hostmarket.json):
 //
 // - an owed chain not yet on its parent is created once from its payload
@@ -36,6 +39,11 @@
 //   parent the node hosts for another layer, so a sale never makes the node
 //   host a parent the operator did not choose.
 //
+// Each pass prints both keys' balances, its orders, what they paid and what
+// it owes, and the storage its sponsor pinned against --storage-budget, as
+// its `GET /terms` reports it (host/status.mjs; `hearth status` prints the
+// same once).
+//
 // It makes the blocks of the market and of every chain it hosts for its
 // orders (host/pace.mjs): each at that chain's own target block time, about
 // one hash a block, paid to its sponsor's key, never to the seller's.
@@ -44,7 +52,8 @@
 // restarted with backoff if it exits) with its own key, `sponsor.json`
 // beside the seller's (mode 0600; it owns nothing but the float the blocks
 // pay it), on --sponsor-port: fees for clients who pay with work, and
-// permanent pins at --storage-rate bytes per market coin. It listens on
+// pins (kept until taken down) at --storage-rate bytes per market coin, up to
+// --storage-budget bytes pinned at once (default 256 MiB). It listens on
 // loopback unless --sponsor-url names where the public reaches it (an https
 // URL in front of the port); the offer names that URL (`sponsor`), or no
 // sponsor, and always the address its blocks pay (`blocks`).
@@ -85,14 +94,14 @@ import { parseArgs } from "node:util";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const sdk = await import(join(HERE, "../vendor/lattice-sdk.js"));
 const { reader } = await import(join(HERE, "../client/market.mjs"));
-const { judge } = await import(join(HERE, "../client/verdict.mjs"));
 const { parseOffer, formatOffer, offerText, offerKey, urlKey, specJSON, parentOf, parseStorageOffer, formatStorageOffer, formatHostURL, parseHostURL, newestOffers, isHTTPS, isClosed } = await import(join(HERE, "../client/records.mjs"));
 const { offerActions, recordsBody, submit, keyFileJSON } = await import(join(HERE, "../client/tx.mjs"));
-const { periodBlocks, durationBlocks, ordered, sellerChains, liveOffers, currentOffer, fundingMessage, burn, burnChain, parseAmount, rpcPort, nodeSecret, authedFetch,
-  nodeVersion, chainSync, ensureKey, operatorRPC, sellerFiles, startsReopened, DEFAULT_STORAGE_RATE } = await import(join(HERE, "hearth.mjs"));
+const { periodBlocks, durationBlocks, ordered, sellerChains, liveOffers, currentOffer, fundingMessage, fundingStep, burn, burnChain, parseAmount, rpcPort, nodeSecret, authedFetch,
+  nodeVersion, chainSync, ensureKey, operatorRPC, sellerFiles, startsReopened, parseSize, growthLine, DEFAULT_STORAGE_RATE, DEFAULT_STORAGE_BUDGET } = await import(join(HERE, "hearth.mjs"));
+const { judgeOwn, report } = await import(join(HERE, "status.mjs"));
 const { closedAt, closingDone } = await import(join(HERE, "stop.mjs"));
 const { pacer } = await import(join(HERE, "pace.mjs"));
-const { sponsorArgs, sponsorBinary, supervise } = await import(join(HERE, "sponsor.mjs"));
+const { sponsorArgs, sponsorBinary, sponsorStorage, supervise } = await import(join(HERE, "sponsor.mjs"));
 
 const { values: args } = parseArgs({
   options: {
@@ -103,6 +112,7 @@ const { values: args } = parseArgs({
     burn: { type: "string" }, "burn-chain": { type: "string" },
     "sponsor-bin": { type: "string", default: "lattice-sponsor" }, "sponsor-port": { type: "string", default: "8650" },
     "sponsor-url": { type: "string" }, "storage-rate": { type: "string", default: String(DEFAULT_STORAGE_RATE) },
+    "storage-budget": { type: "string", default: String(DEFAULT_STORAGE_BUDGET) },
     resume: { type: "boolean", default: false },
   },
 });
@@ -121,13 +131,15 @@ const log = (...parts) => console.log(new Date().toISOString(), ...parts);
 
 // ---- the sponsor's key: where the blocks pay, never the seller's ----
 
-const sponsorKey = join(dirname(resolve(args.key)), "sponsor.json");
-const { address: sponsorAddress, created: sponsorMade } = ensureKey(sdk, sponsorKey, keyFileJSON);
-if (sponsorAddress === self) throw new Error(`${sponsorKey} is the seller's key: the sponsor's key must own nothing a draft could reach; move it away`);
 const sponsorURL = args["sponsor-url"];
 if (sponsorURL !== undefined && !isHTTPS(sponsorURL)) throw new Error(`--sponsor-url is the sponsor's public https URL, not ${sponsorURL}`);
 if (!/^[1-9][0-9]*$/.test(args["storage-rate"])) throw new Error(`--storage-rate is bytes per market coin, a whole number, not ${args["storage-rate"]}`);
+const storageBudget = parseSize(args["storage-budget"], "--storage-budget");
 const sponsorBin = root ? sponsorBinary(args["sponsor-bin"]) : undefined;
+const sponsorKey = join(dirname(resolve(args.key)), "sponsor.json");
+const { address: sponsorAddress, created: sponsorMade } = ensureKey(sdk, sponsorKey, keyFileJSON);
+if (sponsorAddress === self) throw new Error(`${sponsorKey} is the seller's key: the sponsor's key must own nothing a draft could reach; move it away`);
+const sponsorDir = join(dirname(resolve(args.key)), "sponsor");
 log(`${sponsorMade ? "made the sponsor's key" : "sponsor key"} ${sponsorKey}: blocks pay ${sponsorAddress}`);
 if (!root) log("with --node this seller runs no sponsor (lattice-sponsor reaches a node only on its loopback): run one beside the node yourself");
 
@@ -200,6 +212,7 @@ const storageFile = args["storage-offer"] ? JSON.parse(readFileSync(args["storag
 if (storageFile && (!storageFile.id || storageFile.id === offerId)) throw new Error("the storage offer needs an id of its own, not the hosting offer's");
 const urlValue = args.url && formatHostURL(args.url, args.proof);
 if (urlValue && !parseHostURL(urlValue)) throw new Error("--proof must be an https URL on --url's hostname");
+if (offerFile) log(`offer ${offerId}: ${growthLine({ ...offerFile, capacity: offerFile.capacity ?? 1 })}`);
 
 /**
  * Sends its writes once the key holds the market coin for them (offer, url,
@@ -301,21 +314,48 @@ async function ensureBurn() {
 
 // ---- one pass ----
 
-let warned = false, checked = false, syncLine, sponsor, pace, paced = [marketPath];
+let warned = false, checked = false, syncLine, sponsor, pace, paced = [marketPath], funded = false, fundLine;
 
-/** The sponsor beside the node, started once its port is known. */
+/** The sponsor beside the node, started once the seller's key is funded (`fund`). */
 function startSponsor() {
   if (!root || sponsor || args.once) return;
-  const dir = join(dirname(resolve(args.key)), "sponsor");
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(sponsorDir, { recursive: true });
   sponsor = supervise({ bin: sponsorBin, log, args: sponsorArgs({ node: rpcURL(), cookieFile: join(root, "chains/Nexus/.cookie"), key: sponsorKey,
-    port: args["sponsor-port"], publicURL: sponsorURL, market: marketPath, storageRate: args["storage-rate"], storageFile: join(dir, "storage.json"), payTo: self }) });
+    port: args["sponsor-port"], publicURL: sponsorURL, market: marketPath, storageRate: args["storage-rate"], storageFile: join(sponsorDir, "storage.json"),
+    storageBudget, payTo: self }) });
   log(`sponsor on ${sponsorURL ? `every interface, port ${args["sponsor-port"]}, public at ${sponsorURL}` : `127.0.0.1:${args["sponsor-port"]} only (no --sponsor-url: the offer names no sponsor)`}`);
+}
+
+/**
+ * Whether the seller's key holds its first writes' fees (true from then on
+ * in this process). With `first` (none of its offers is on the market yet)
+ * and beside the node, before lattice-sponsor runs, it moves them from the
+ * sponsor key's block rewards: the same transaction each pass until it
+ * lands. Otherwise, with `first`, it says what it waits for.
+ */
+async function fund(first) {
+  if (funded) return true;
+  const n = node();
+  const [seller, sponsorAccount, info] = await Promise.all([n.account(marketPath, self), n.account(marketPath, sponsorAddress), n.api("/api/chain/info", marketPath)]);
+  const fee = BigInt(args.fee ?? info.minRelayFee ?? 1);
+  const step = fundingStep({ fee, seller: seller.balance, sponsor: sponsorAccount.balance, canMove: first && !!root && !sponsor,
+    chain: marketPath, address: self, interval: args.interval });
+  if (step.ready) { funded = true; fundLine = undefined; return true; }
+  if (!first) return false;
+  if (step.wait) { if (step.wait !== fundLine) log((fundLine = step.wait)); return false; }
+  const body = sdk.buildTransfer({ from: sponsorAddress, to: self, amount: step.move, fee, nonce: sponsorAccount.nonce, chainPath: marketPath.split("/") });
+  const sponsorPrivate = sdk.hexToBytes(JSON.parse(readFileSync(sponsorKey, "utf8")).privateKey);
+  try {
+    const tx = await submit(sdk, rpcURL(), body, sponsorPrivate, authed);
+    const line = `moving ${step.move} market coin of the sponsor key's block rewards to the seller's key for its first writes (lattice-sponsor starts once it has landed)`;
+    if (line !== fundLine) log((fundLine = line), tx);
+  } catch (e) { log("moving the sponsor's block rewards to the seller's key: not taken yet (will retry)", e.message); }
+  return false;
 }
 
 async function pass() {
   if (root) port = await rpcPort(root, args.lattice, authed);
-  if (!checked) { log(`Lattice ${await nodeVersion(rpcURL(), authed)}`); checked = true; startSponsor(); }
+  if (!checked) { log(`Lattice ${await nodeVersion(rpcURL(), authed)}`); checked = true; }
   // The market and the offer's parent first: a fresh node reads neither yet.
   {
     const { fragment, condition } = await readFragment();
@@ -339,11 +379,20 @@ async function pass() {
     was.done.catch((e) => { log(`pacer stopped (starting it again next pass): ${e.message}`); if (pace === was) pace = undefined; });
   }
   const closing = existsSync(files.closing);
+  // A closing seller only serves what is paid: it needs no coin to write.
+  let ready = closing || await fund(false);
+  if (ready) startSponsor();
   const n = node();
   const m = await n.market(marketPath).catch((e) => {
     throw e.status === 404 ? Object.assign(new Error(`waiting for the node to host ${marketPath}`), { waiting: true }) : e;
   });
   const newest = newestOffers(m.versions);
+  if (!ready) {
+    // Its first writes wait for their fees (`fund`); once an offer of its
+    // is out, lattice-sponsor serves it, and a write short of coin says so.
+    ready = [...newest.keys()].some((k) => k.startsWith(`${self}/`)) || await fund(true);
+    if (ready) startSponsor();
+  }
   live = liveOffers(newest, self, m.height);
   current = currentOffer({ offers: newest, self, id: offerId, file: offerFile });
   if (offerFile && !newest.has(`${self}/${offerId}`) && !warned) {
@@ -351,26 +400,13 @@ async function pass() {
     for (const o of live) log(`offer ${o.id} stays on sale until market block ${o.until} beside ${offerId}: close every offer with \`hearth stop\``);
   }
   // Storage orders are the sponsor's to serve.
-  const mine = m.orders.filter((o) => o.host === self && !(m.versions.get(`${o.host}/${o.id}`) ?? []).some((t) => parseStorageOffer(t)));
   const { status } = (await rpc("/config")).body;
   const hosted = new Set((status.chains ?? []).filter((c) => c.actual === "hosted").map((c) => c.path));
-
-  // Genesis as this node sees it, for paths it hosts.
-  const genesis = new Map();
-  for (const path of new Set(mine.map((o) => o.path))) {
-    if (!hosted.has(path)) continue;
-    const facts = await n.genesis(path).catch(() => undefined);
-    if (facts) genesis.set(path, facts);
-  }
-  const verdicts = judge({ sdk, height: m.height, versions: m.versions, orders: mine, renewals: m.renewals.filter((r) => r.host === self), genesis });
-  const owed = new Map();
-  for (const o of mine) {
-    const v = verdicts.get(o.key);
-    if (v.kind === "owed" && v.active && !owed.has(o.path)) owed.set(o.path, v.payload);
-  }
-  const counts = {};
-  for (const v of verdicts.values()) counts[v.kind] = (counts[v.kind] ?? 0) + 1;
-  log(`market ${m.height}: ${mine.length} orders`, JSON.stringify(counts), `owed now: ${[...owed.keys()].join(" ") || "none"}`);
+  const judged = await judgeOwn({ sdk, n, m, self, hosted });
+  const { owed, counts } = judged;
+  const [sellerAccount, sponsorAccount] = await Promise.all([n.account(marketPath, self), n.account(marketPath, sponsorAddress)]);
+  log(report({ market: marketPath, height: m.height, seller: { address: self, balance: sellerAccount.balance }, sponsor: { address: sponsorAddress, balance: sponsorAccount.balance },
+    ...judged, storage: root ? await sponsorStorage(args["sponsor-port"]) : undefined }).join("\n  "));
   if (closing) {
     // Done once every offer is closed, every order the close cannot void
     // has settled, and nothing paid is left.
@@ -382,7 +418,7 @@ async function pass() {
       quit(0);
     }
     log(`closing: ${state.line}`);
-  } else if (await ensureOffer(m, newest)) return;
+  } else if (ready && await ensureOffer(m, newest)) return;
 
   // List every owed chain under an offer's parent or a parent the node
   // hosts for another layer, creating each one not yet on its parent first.
