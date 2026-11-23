@@ -360,18 +360,7 @@ async function pass() {
   // The market and the offer's parent first: a fresh node reads neither yet.
   {
     const { fragment, condition } = await readFragment();
-    // A list kept for another market: rewriting it for this one would let
-    // go of what that market's buyers paid for. Whose list it is, the seller
-    // wrote down (files.market) before it first wrote the list; with no note
-    // (Hearth 1.0.0), a list naming this market is its own.
-    const hosted = fragment.hostedChains ?? [];
-    const noted = existsSync(files.market) ? readFileSync(files.market, "utf8").trim() : undefined;
-    const theirs = noted ?? (hosted.length && !hosted.includes(marketPath) ? "another market" : undefined);
-    if (hosted.length && theirs !== undefined && theirs !== marketPath) {
-      throw Object.assign(new Error(`this node hosts ${hosted.join(" ")} for ${theirs}, not ${marketPath}: give --market ${noted ?? "<that market>"} to keep selling there`), { fatal: true });
-    }
-    if (noted !== marketPath) writeFileSync(files.market, marketPath + "\n");
-    const missing = own().filter((p) => !hosted.includes(p));
+    const missing = own().filter((p) => !(fragment.hostedChains ?? []).includes(p));
     if (missing.length) {
       await rpc(FRAGMENT, { ...fragment, hostedChains: ordered([...(fragment.hostedChains ?? []), ...missing]) }, "PUT", condition);
       log("hosting", missing.join(" "));
@@ -471,7 +460,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { log("stop
 log(`selling hosting on ${marketPath} as ${self}`);
 for (;;) {
   try { await pass(); } catch (e) {
-    if (e.tooOld || e.fatal) { console.error(`hearth: ${e.message}`); quit(2); }
+    if (e.tooOld) { console.error(`hearth: ${e.message}`); quit(2); }
     log(...(e.waiting ? [e.message] : ["pass failed:", e.message]));
   }
   if (args.once) break;

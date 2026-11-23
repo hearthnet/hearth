@@ -46,8 +46,9 @@ const coinName = "Hearth coin", parentCoin = `${marketPath.at(-2)} coin`;
  * A node serving the market, found through Lattice: the SDK's resolver asks
  * the entry for the read URLs the market's hosts declare, and keeps those on
  * the entry's network that serve the market (all probed at once, each with
- * a timeout). The fastest whose market has the market's genesis is used, one
- * that takes transactions before one that only serves reads; none, the entry.
+ * a timeout). Of those that take transactions (the app reads from and sends
+ * to one node), the fastest whose market has the market's genesis is used;
+ * none, the entry.
  */
 async function findNode() {
   const market = cfg.market.split("/");
@@ -58,9 +59,7 @@ async function findNode() {
     if (genesis && (await new sdk.NodeClient(url, market).chainInfo(AbortSignal.timeout(5_000))).genesisHash !== genesis) throw new Error("another chain");
     return url;
   }));
-  try { return await fastest(hosts.filter((h) => h.declaresSubmit)); } catch {}
-  try { return await fastest(hosts.filter((h) => !h.declaresSubmit)); } catch {}
-  return cfg.entry;
+  try { return await fastest(hosts.filter((h) => h.declaresSubmit)); } catch { return cfg.entry; }
 }
 if (!cfg.node) cfg.node = await findNode();
 const r = reader(sdk, cfg.node);

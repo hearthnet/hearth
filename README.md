@@ -44,7 +44,9 @@ needs Lattice 5.0.0 or newer (you have X: ...)" beside an older one, X as
 `<root>/hearth/seller.json` (mode 0600; it prints the address, never the
 key, and refuses a key file others can read) unless there is one, has the
 node host the market (`Nexus/hearth`) and the offer's parent
-(`--parent`, default `Nexus`), writes the offer (10,000 market coin
+(`--parent`, default `Nexus`; a seller from before mainnet keeps selling on
+testnet with `--market Nexus/testnet/lodger-3129cc --parent Nexus/testnet`: run
+without them, it would rewrite the node's list of hosted chains for the new market), writes the offer (10,000 market coin
 per day unless `--price` says, converted to market blocks at the market's block time; `--chains 10`
 and small chains' limits unless given: see *Default limits*), then sells in
 the foreground. A bad flag, or a `--root` where no Lattice node lives ("no
