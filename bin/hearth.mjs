@@ -60,7 +60,7 @@ import { DEFAULT_MARKET, DEFAULT_PRICE, WHY_SELL, DEFAULT_STORAGE_RATE, authedFe
   installedSeller, nodeSecret, nodeVersion, offerFromFlags, markClosing, markReopen, onPath, sponsorBooks, operatorRPC, parseAmount, rpcPort,
   sellerFiles, serviceUnits, sweep, waitSynced } from "../host/hearth.mjs";
 import { sponsorAnswers, sponsorBinary, sponsorStorage, unpin } from "../host/sponsor.mjs";
-import { initManagedNode, installTools, managedRoot, startManagedNode } from "../host/runtime.mjs";
+import { initManagedNode, installTools, managedRoot, nodeAnswers, runManagedNode } from "../host/runtime.mjs";
 import { REMOTE_STORAGE, judgeOwn, report } from "../host/status.mjs";
 import { isRootCID } from "../client/records.mjs";
 import { stop } from "../host/stop.mjs";
@@ -119,21 +119,25 @@ const tools = () => (installed ??= installTools({ home: homedir() }));
 
 /**
  * The node's root: none with --node; else --root (where a node must be);
- * else a running node beside this process; else the node Hearth runs,
- * installed, made and started the first time (`start: false` only makes it).
- * Sets --lattice to a `lattice` that drives it: Hearth's own for its node,
- * else the one on PATH, else Hearth's own.
+ * else a running node beside this process (the current directory, or
+ * ~/.lattice); else the node Hearth runs in ~/.hearth/node, started for as
+ * long as this command runs. Only `hearth sell` makes that node (`create`;
+ * `install` only makes it, for the services to start). A node of your own
+ * that is not running is said, never replaced.
  */
-async function nodeRoot({ start = true } = {}) {
-  if (a.node) return undefined;
+async function nodeRoot({ create = false, install = false } = {}) {
+  if (a.node) { a.lattice ??= "lattice"; return undefined; }
+  if (a.root) { a.lattice ??= "lattice"; return checkRoot(resolve(a.root)); }
   const home = homedir();
-  let root = a.root ? checkRoot(resolve(a.root)) : undefined;
-  if (!root) { try { root = findRoot({ cwd: process.cwd(), home }); } catch {} }
-  const managed = !root || root === managedRoot(home);
-  if (!a.lattice && (managed || !onPath("lattice"))) a.lattice = (await tools()).lattice;
-  a.lattice ??= "lattice";
-  if (!root) root = start ? await startManagedNode({ home, lattice: a.lattice }) : initManagedNode({ home, lattice: a.lattice });
-  return root;
+  try { const root = findRoot({ cwd: process.cwd(), home }); a.lattice ??= "lattice"; return root; } catch {}
+  for (const dir of [process.cwd(), join(home, ".lattice")].filter((d) => resolve(d) !== managedRoot(home))) {
+    if (existsSync(join(dir, "lattice.json")) || existsSync(join(dir, "chains/Nexus"))) fail(`the node at ${dir} is not running: start it, or give --root`);
+  }
+  const root = managedRoot(home);
+  if (!create && !existsSync(join(root, "hearth/seller.json"))) fail("nothing is sold from this machine yet: run hearth sell (or give --root, or --node with --token-file)");
+  a.lattice ??= (await tools()).lattice;
+  if (install) return initManagedNode({ home, lattice: a.lattice });
+  return (await runManagedNode({ home, lattice: a.lattice })).root;
 }
 
 /** The node (beside it, or remote), its secret, and the seller's key path. */
@@ -388,7 +392,7 @@ try {
   if (!a.price && !a.offer) a.price = DEFAULT_PRICE;
   checkSellFlags(a);
   // The node: remote with --node, else its root.
-  const root = await nodeRoot({ start: !a.install });
+  const root = await nodeRoot({ create: true, install: a.install });
   // Beside the node, a sponsor: --sponsor-bin, else one on PATH, else Hearth's own.
   if (root && !a["sponsor-bin"] && !onPath("lattice-sponsor")) a["sponsor-bin"] = (await tools())["lattice-sponsor"];
   if (root) sponsorBinary(a["sponsor-bin"]);
@@ -451,11 +455,9 @@ try {
     // version from the file once, though it runs with --resume.
     markReopen(sellerFiles({ root, key }));
     console.log(`load them with:\n  ${load}\n${note}`);
-    // Hearth's own node, kept up in the background since an earlier verb: the
-    // node service would find its port taken.
-    if (root === managedRoot(homedir()) && existsSync(join(root, "chains/Nexus/.cookie"))) {
-      console.log(`first stop the node running in the background: ${a.lattice} down --root ${root}`);
-    }
+    // Hearth's own node, run by a hearth sell still running: the node service
+    // would find its port taken.
+    if (root === managedRoot(homedir()) && await nodeAnswers(root)) console.log("first stop the hearth sell running now (its node stops with it)");
     process.exit(0);
   }
 

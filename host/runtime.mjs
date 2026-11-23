@@ -1,10 +1,11 @@
 // The node Hearth runs for a seller who runs none: pinned releases of the
 // node and the sponsor, downloaded once into ~/.hearth/bin and checked
-// against the SHA-256 below, and a node kept up in ~/.hearth/node.
+// against the SHA-256 below, and a node in ~/.hearth/node that runs while a
+// hearth command does.
 
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** Where each tool's release tarball is: a URL template with {version} and {platform}. */
@@ -44,7 +45,7 @@ export function platformName(platform = process.platform, arch = process.arch) {
 /**
  * The pinned binaries' paths ({ lattice, "lattice-node", "lattice-sponsor" }),
  * each release downloaded the first time and refused unless its SHA-256 is
- * the pinned one. A release lands whole or not at all.
+ * the pinned one. A release lands whole (one rename) or not at all.
  */
 export async function installTools({ home, platform = platformName(), fetchImpl = (...a) => fetch(...a), log = console.log, pinned = PINNED }) {
   if (!platform) throw new Error(`there is no prebuilt node for ${process.platform} ${process.arch}: run one yourself and give --root (or --node with --token-file)`);
@@ -53,7 +54,8 @@ export async function installTools({ home, platform = platformName(), fetchImpl 
   let urls;
   for (const [tool, { version, bins, sha256 }] of Object.entries(pinned)) {
     const dir = join(bin, `${tool}-${version}`);
-    if (!bins.every((b) => existsSync(join(dir, b)))) {
+    const whole = () => bins.every((b) => existsSync(join(dir, b)));
+    if (!whole()) {
       if (!urls) {
         const res = await fetchImpl(RELEASES_URL);
         if (!res.ok) throw new Error(`${RELEASES_URL}: HTTP ${res.status}`);
@@ -68,18 +70,23 @@ export async function installTools({ home, platform = platformName(), fetchImpl 
       const got = createHash("sha256").update(body).digest("hex");
       if (got !== sha256[platform]) throw new Error(`${url} has SHA-256 ${got}, not the pinned ${sha256[platform]}: not installed`);
       mkdirSync(bin, { recursive: true });
+      // Downloads an interrupted run left behind.
+      for (const old of readdirSync(bin).filter((n) => n.startsWith(".download-"))) {
+        if (Date.now() - statSync(join(bin, old)).mtimeMs > 3_600_000) rmSync(join(bin, old), { recursive: true, force: true });
+      }
       const tmp = mkdtempSync(join(bin, ".download-"));
       try {
         writeFileSync(join(tmp, "release.tar.gz"), body);
-        execFileSync("tar", ["-xzf", join(tmp, "release.tar.gz"), "-C", tmp]);
+        try { execFileSync("tar", ["-xzf", join(tmp, "release.tar.gz"), "-C", tmp], { stdio: "ignore" }); }
+        catch (e) { throw new Error(`could not unpack ${tool} with tar (${e.code ?? `exit ${e.status}`}): install tar and gzip`); }
         const staged = join(tmp, "staged");
         mkdirSync(staged);
         for (const b of bins) {
           renameSync(join(tmp, `${tool}-${version}-${platform}`, "bin", b), join(staged, b));
           chmodSync(join(staged, b), 0o755);
         }
-        rmSync(dir, { recursive: true, force: true });
-        renameSync(staged, dir);
+        // Another hearth command may have installed it meanwhile: theirs stands.
+        try { renameSync(staged, dir); } catch (e) { if (!whole()) throw e; }
       } finally {
         rmSync(tmp, { recursive: true, force: true });
       }
@@ -89,10 +96,6 @@ export async function installTools({ home, platform = platformName(), fetchImpl 
   return paths;
 }
 
-const alive = (pid) => {
-  try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; }
-};
-
 /** The root of the node Hearth runs, made the first time (`lattice init`). */
 export function initManagedNode({ home, lattice }) {
   const root = managedRoot(home);
@@ -101,30 +104,45 @@ export function initManagedNode({ home, lattice }) {
   return root;
 }
 
+/** Whether a node runs at `root`: its cookie is there and its operator port answers (a cookie outlives a crash). */
+export async function nodeAnswers(root, fetchImpl = (...a) => fetch(...a)) {
+  if (!existsSync(join(root, "chains/Nexus/.cookie"))) return false;
+  let port = 8080;
+  try { port = JSON.parse(readFileSync(join(root, "lattice.json"), "utf8")).rpc ?? port; } catch {}
+  try { await fetchImpl(`http://127.0.0.1:${port}/status`, { signal: AbortSignal.timeout(2_000) }); return true; } catch { return false; }
+}
+
+const tail = (file) => { try { return readFileSync(file, "utf8").trimEnd().split("\n").slice(-5).join("\n"); } catch { return ""; } };
+
 /**
- * The node Hearth runs, at `managedRoot(home)` (initManagedNode), kept up by a detached loop that outlives this
- * command (`lattice up` exits 75 to be restarted, 0 when stopped). Resolves
- * with its root once it runs (its cookie is there).
+ * The node Hearth runs, at `managedRoot(home)`: the one already running there
+ * (another hearth command's), else one this process starts and runs as its
+ * child until `stop()` or this process exits (`lattice up` exits 75 to be
+ * started again). Resolves once it answers.
  */
-export async function startManagedNode({ home, lattice, log = console.log, timeoutMs = 180_000, pollMs = 500 }) {
+export async function runManagedNode({ home, lattice, log = console.log, timeoutMs = 180_000, pollMs = 500 }) {
   const root = initManagedNode({ home, lattice });
-  const cookie = join(root, "chains/Nexus/.cookie");
-  if (existsSync(cookie)) return root;
-  const pidFile = join(root, "keeper.pid");
-  const running = existsSync(pidFile) && alive(Number(readFileSync(pidFile, "utf8")));
-  if (!running) {
-    const out = openSync(join(root, "node.log"), "a");
-    const keeper = spawn("/bin/sh", ["-c", 'while :; do "$0" up --root "$1"; c=$?; [ "$c" -eq 0 ] && exit 0; sleep 3; done', lattice, root],
-      { detached: true, stdio: ["ignore", out, out] });
-    keeper.unref();
-    writeFileSync(pidFile, `${keeper.pid}\n`);
-    log(`started the node in ${root} (its log: ${join(root, "node.log")}; it keeps running after this command)`);
-  }
-  const pid = Number(readFileSync(pidFile, "utf8"));
+  if (await nodeAnswers(root)) return { root, stop: () => {} };
+  const logFile = join(root, "node.log");
+  let child, exited, stopping = false;
+  const start = () => {
+    const out = openSync(logFile, "a");
+    exited = undefined;
+    child = spawn(lattice, ["up", "--root", root], { stdio: ["ignore", out, out] });
+    child.on("exit", (code) => {
+      exited = code ?? 1;
+      if (code === 75 && !stopping) start();
+    });
+  };
+  const stop = () => { stopping = true; child?.kill("SIGTERM"); };
+  start();
+  process.on("exit", stop);
+  log(`started the node in ${root} (its log: ${logFile}); it stops when this command does`);
   for (const end = Date.now() + timeoutMs; Date.now() < end;) {
-    if (existsSync(cookie)) return root;
-    if (!alive(pid)) break;
+    if (await nodeAnswers(root)) return { root, stop };
+    if (exited !== undefined && exited !== 75) break;
     await new Promise((r) => setTimeout(r, pollMs));
   }
-  throw new Error(`the node in ${root} did not start: see ${join(root, "node.log")}`);
+  stop();
+  throw new Error(`the node in ${root} did not start; the end of ${logFile}:\n${tail(logFile)}`);
 }

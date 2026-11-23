@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { installTools, platformName } from "../host/runtime.mjs";
+import { installTools, nodeAnswers, platformName, runManagedNode } from "../host/runtime.mjs";
+
+const BIN = new URL("../bin/hearth.mjs", import.meta.url).pathname;
+const run = (args, { cwd, home }) => new Promise((ok) => execFile(process.execPath, [BIN, ...args], { cwd, env: { ...process.env, HOME: home } }, (error, stdout, stderr) => ok({ code: error?.code ?? 0, out: stdout + stderr })));
 
 const temp = () => mkdtempSync(join(tmpdir(), "hearth-runtime-"));
 
@@ -56,4 +59,45 @@ test("a platform with no prebuilt node says to run one and give --root", async (
   assert.equal(platformName("darwin", "arm64"), "macos-arm64");
   assert.equal(platformName("linux", "x64"), "linux-amd64");
   await assert.rejects(installTools({ home: temp(), platform: null }), /no prebuilt node .*give --root/);
+});
+
+test("on a machine that sold nothing, a hearth command says so, and downloads and starts nothing", async () => {
+  const home = temp();
+  for (const verb of ["status", "stop", "sweep"]) {
+    const { code, out } = await run([verb], { cwd: temp(), home });
+    assert.equal(code, 2, out);
+    assert.match(out, /nothing is sold from this machine yet: run hearth sell/);
+  }
+  assert.ok(!existsSync(join(home, ".hearth")), "nothing installed");
+});
+
+test("a node of your own that is not running is named, not replaced by Hearth's", async () => {
+  const home = temp(), own = temp();
+  writeFileSync(join(own, "lattice.json"), "{}\n");
+  const { code, out } = await run(["sell", "--price", "100/day"], { cwd: own, home });
+  assert.equal(code, 2, out);
+  assert.match(out, /the node at \S+ is not running: start it, or give --root/);
+  assert.ok(out.includes(own.split("/").pop()), "names that node's folder");
+  assert.ok(!existsSync(join(home, ".hearth")));
+});
+
+test("a cookie left by a crash is no running node", async () => {
+  const root = temp();
+  mkdirSync(join(root, "chains/Nexus"), { recursive: true });
+  writeFileSync(join(root, "chains/Nexus/.cookie"), "c");
+  writeFileSync(join(root, "lattice.json"), JSON.stringify({ rpc: 1 }));
+  assert.equal(await nodeAnswers(root), false);
+});
+
+test("a node that cannot start says so with the end of its log, and nothing keeps running", async () => {
+  const home = temp(), dir = temp();
+  const lattice = join(dir, "lattice");
+  writeFileSync(lattice, `#!/bin/sh
+case "$1" in
+  init) mkdir -p "$3"; echo '{"rpc": 1}' > "$3/lattice.json" ;;
+  up) echo "listen 0.0.0.0:4001: address already in use"; exit 1 ;;
+esac
+`);
+  chmodSync(lattice, 0o755);
+  await assert.rejects(runManagedNode({ home, lattice, log: () => {}, pollMs: 50 }), /did not start; the end of .*node\.log:\nlisten 0\.0\.0\.0:4001: address already in use/);
 });

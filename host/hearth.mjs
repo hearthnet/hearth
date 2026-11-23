@@ -229,12 +229,11 @@ const UNITS = { hour: 3600, day: 86400, week: 604800 };
 /**
  * The node beside this process, as `lattice` finds it: `--root`, else the
  * current directory; and, since a bare `lattice-node` keeps its storage in
- * ~/.lattice/chains/Nexus, ~/.lattice; and the node Hearth runs (~/.hearth/node).
- * The first that holds a running node's cookie (`chains/Nexus/.cookie`, there
- * only while it runs).
+ * ~/.lattice/chains/Nexus, ~/.lattice. The first that holds a running node's
+ * cookie (`chains/Nexus/.cookie`, there only while it runs).
  */
 export function findRoot({ cwd, home }) {
-  const tried = [cwd, join(home, ".lattice"), join(home, ".hearth/node")];
+  const tried = [cwd, join(home, ".lattice")];
   const root = tried.find((dir) => existsSync(join(dir, "chains/Nexus/.cookie")));
   if (!root) throw new Error(`no running node under ${tried.join(" or ")}`);
   return root;

@@ -29,10 +29,10 @@ npx @hearthnet/hearth sell                  # 10000 Hearth coin a day per chain;
 
 Hearth runs the node it sells from. The first time, it downloads a pinned
 node and sponsor into `~/.hearth/bin` (each checked against the SHA-256 in
-`host/runtime.mjs`), makes the node in `~/.hearth/node` and starts it; the
-node keeps running after the command (its log is `~/.hearth/node/node.log`),
-and every `hearth` verb uses it. To stop it:
-`~/.hearth/bin/lattice-node-5.0.0/lattice down --root ~/.hearth/node`. It listens on port 4001 for peers and serves
+`host/runtime.mjs`), makes the node in `~/.hearth/node`, and runs it
+while `hearth sell` sells (its log is `~/.hearth/node/node.log`); stop the
+seller and the node stops with it. Other `hearth` verbs use that node while
+it runs, or start it for as long as they take. It listens on port 4001 for peers and serves
 its operator API on 127.0.0.1:8080. To use a node you run yourself instead,
 give `--root` (its root) or `--node` with `--token-file`.
 
@@ -42,8 +42,10 @@ tip against the best header its peers showed) and reads, funds, writes and
 burns nothing.
 
 It finds the node: `--root`, else the current directory, else `~/.lattice`,
-else `~/.hearth/node`, whichever holds a running node's
-`chains/Nexus/.cookie`; with none, it starts its own (above). Beside a node
+whichever holds a running node's `chains/Nexus/.cookie`; with none, Hearth's
+own (above). A node of your own there that is not running stops it ("the node
+at <dir> is not running"); only `hearth sell` makes Hearth's node, and the
+other verbs, on a machine that sold nothing, say so. Beside a node
 of your own it checks that the node has what it needs (`GET /config` saying
 which layer lists each chain) and stops with "Hearth needs node 5.0.0 or
 newer (you have X: ...)" beside an older one, X as `GET /status` reports it. It makes the seller's key at
