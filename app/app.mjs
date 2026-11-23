@@ -26,12 +26,13 @@ const SDK_TAG = "v1.0.0";
 const SDK_URL = `https://cdn.jsdelivr.net/gh/hearthnet/hearth@${SDK_TAG}/vendor/lattice-browser.js`;
 const DOCS = "https://hearthnet.github.io/";
 
-// ---- configuration: ?node=&market=&sponsor= override the testnet defaults ----
+// ---- configuration: ?node=&market=&sponsor= override the mainnet defaults ----
 const params = new URLSearchParams(location.search);
 const cfg = {
-  node: params.get("node") ?? "https://lattice-testnet-apps-iad.fly.dev",
-  market: params.get("market") ?? "Nexus/testnet/lodger-3129cc",
-  sponsor: params.get("sponsor") ?? "https://lattice-testnet-apps-iad.fly.dev:8650/sponsor",
+  node: params.get("node") ?? "https://rpc.lattice.build",
+  market: params.get("market") ?? "Nexus/hearth",
+  // A fee sponsor that pays out the parent's coin for work (testnet's does); none by default.
+  sponsor: params.get("sponsor") ?? "",
   blockSeconds: Number(params.get("blockSeconds") ?? 60),
 };
 const marketPath = cfg.market.split("/");
@@ -553,8 +554,8 @@ async function viewCoin(view, _, current) {
   <section class="stack">
     <details id="earn"><summary>Need ${esc(parentCoin)}?</summary>
       <div class="stack" style="margin-top:12px">
-        <p class="muted">Anyone holding ${esc(parentCoin)} can send it to your address. On testnet you can also earn it with this device: it does work for the fee sponsor, which pays your address each time your earnings reach its payout. It keeps a few cores busy until you press Stop or close this page. It is worth nothing: it is for testing. <a href="${DOCS}">More in the docs</a>.</p>
-        <div class="row"><button class="btn" id="grind">Earn with this device</button><span class="muted small" id="grindStatus"></span></div>
+        <p class="muted">Anyone holding ${esc(parentCoin)} can send it to your address.${cfg.sponsor ? ` You can also earn it with this device: it does work for the fee sponsor, which pays your address each time your earnings reach its payout. It keeps a few cores busy until you press Stop or close this page.` : ""} <a href="${DOCS}">More in the docs</a>.</p>
+        ${cfg.sponsor ? `<div class="row"><button class="btn" id="grind">Earn with this device</button><span class="muted small" id="grindStatus"></span></div>` : ""}
       </div>
     </details>
     <details><summary>Sell ${coinName}</summary>
@@ -595,10 +596,10 @@ async function viewCoin(view, _, current) {
   if (me) loadBalances().then(() => { if (current()) { you(); list().catch(() => {}); } });
   showPending();
 
-  // Earning, on testnet, with this device's cores (`startEarning`).
+  // Earning with this device's cores (`startEarning`), where a sponsor pays out.
   refreshYou = () => { if (current()) { you(); list().catch(() => {}); } };
   showEarning();
-  $("#grind").onclick = () => {
+  if ($("#grind")) $("#grind").onclick = () => {
     if (earning) { earning.stop(); return; }
     if (!me) { makeAccount(); you(); }
     startEarning();
@@ -621,7 +622,7 @@ async function viewCoin(view, _, current) {
   };
 }
 
-// ---- Earning testnet coin with this device ----
+// ---- Earning the parent's coin with this device, through a sponsor ----
 //
 // The fee sponsor pays an address once the work done for it reaches its
 // payout. The page asks for work and hands back shares itself, one request at

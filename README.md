@@ -29,7 +29,7 @@ to get it, or give `--sponsor-bin`), and Node.js 22 or later. In the node's root
 npx @hearthnet/hearth sell                  # 10000 Hearth coin a day per chain; --price to choose
 ```
 
-**The first sync of testnet takes about 1–2 hours and ~1.5 GB.** Until the
+**The first sync of Nexus and the market takes a few minutes.** Until the
 node has synced the market, the seller prints `syncing market: h / H` (its
 tip against the best header its peers showed) and reads, funds, writes and
 burns nothing.
@@ -43,8 +43,8 @@ needs Lattice 5.0.0 or newer (you have X: ...)" beside an older one, X as
 `GET /status` reports it. It makes the seller's key at
 `<root>/hearth/seller.json` (mode 0600; it prints the address, never the
 key, and refuses a key file others can read) unless there is one, has the
-node host the market (`Nexus/testnet/lodger-3129cc`) and the offer's parent
-(`--parent`, default `Nexus/testnet`), writes the offer (10,000 market coin
+node host the market (`Nexus/hearth`) and the offer's parent
+(`--parent`, default `Nexus`), writes the offer (10,000 market coin
 per day unless `--price` says, converted to market blocks at the market's block time; `--chains 10`
 and small chains' limits unless given: see *Default limits*), then sells in
 the foreground. A bad flag, or a `--root` where no Lattice node lives ("no
@@ -128,8 +128,7 @@ again, with backoff, whenever it exits. Its key is
 lends the key's authority to a draft, so it must own nothing but its float,
 which the pacer's blocks pay. It pays fees for clients who pay with
 proof-of-work shares, and sells pins for work at `--storage-rate`
-bytes per market coin (default 10240, what testnet's own storage sponsor
-charges on the market: pins are kept until the operator takes them down, so a megabyte costs about a
+bytes per market coin (default 10240: pins are kept until the operator takes them down, so a megabyte costs about a
 tenth of a market block's reward), up to `--storage-budget` bytes pinned at once
 (`256M` by default; `K`, `M`, `G`, `T` are binary), on `--sponsor-port`
 (default 8650). Pins are served from the node's IP. `hearth unpin <cid>`
@@ -224,8 +223,8 @@ the sponsor pays the address in coin once its earnings reach its payout
 (`GET /earnings`). It stops once the address holds `--until` coins on the
 market (by default enough for the seller's first writes and a close: four
 fees), which it reads from the node once the node has synced the market;
-until then it prints the sponsor's book. The default sponsor is
-`https://lattice-testnet-apps-iad.fly.dev:8650/sponsor`. Each of the
+until then it prints the sponsor's book. `--sponsor` names the sponsor (its
+`/sponsor` URL); there is no default. Each of the
 `--workers` threads waits out an answer of 429 for its `Retry-After`, else
 for a backoff.
 
@@ -270,13 +269,13 @@ burnAddress(host) = CID(DAG-CBOR { domain: "lattice burn v1", host })
 account's address is the CID of `{ key }`), so the coin there is gone. The
 burned total is that address's balance (`GET /api/state/account/<burn
 address>?chainPath=<path>`), 0 if it has never been used. Burns count on each
-chain from Nexus down to the market (`Nexus`, `Nexus/testnet`, the market),
+chain from Nexus down to the market (`Nexus`, then the market),
 each in its own coin: the Hosts page shows them per chain and never adds them
 up. Anyone can burn for a host: it is a plain transfer to its burn address. A
 burn costs whoever made it; it says nothing about how a host serves.
 
 ```
-npx @hearthnet/hearth burn 300 --chain Nexus/testnet      # burns 300 now, from the seller's key
+npx @hearthnet/hearth burn 300 --chain Nexus              # burns 300 now, from the seller's key
 npx @hearthnet/hearth sell --burn 5000                     # burns once, up to 5000 burned on the market
 ```
 
@@ -303,7 +302,7 @@ npx @hearthnet/hearth sell-coin 300000 --price 3000 [--float 100]
 
 `hearth sell-coin <coin> --price <parent coin>` locks `<coin>` of the seller
 key's market coin as a Lattice deposit demanding `<parent coin>` on the
-market's parent (Nexus/testnet for the default market), for all of it. It
+market's parent (Nexus for the default market), for all of it. It
 checks every amount, and refuses to leave the key less than `--float` for its
 fees, before it signs. Like `hearth sweep`, it refuses while the seller or
 a lattice-sponsor on `--sponsor-port` runs. A retry that finds an open
@@ -324,8 +323,8 @@ coin on the market chain for a price in the parent chain's coin (a Lattice
 *deposit*). A buyer pays that price on the parent (a *receipt*) and takes the
 coin on the market chain (a *withdrawal*). Lattice checks both sides, so
 nobody holds the payment in between, and there is no exchange to trust.
-On testnet, the parent's coin can also be earned with the device's
-processor through the fee sponsor's payouts.
+Where a fee sponsor pays out the parent's coin (testnet's does), it can
+also be earned with the device's processor.
 
 **Records.** The policy (`policy/src/lib.rs`) is only filters on keys and
 coin; it never reads a record's value. Each filter is yes or no for one
@@ -355,10 +354,9 @@ latest `until` any version names, so a close never cuts short time paid
 before it.
 
 `chain/spec.json` and `chain/policy.wasm` (this repo's build of
-`policy/src`) make a devnet market, the spec naming the module by its own
-CID. The testnet market's facts are in `chain/market.json`: its path,
-genesis and module CID, whose bytes were built from `policy/src` before a
-path remap and are not committed.
+`policy/src`) make the market, the spec naming the module by its own
+CID. The market's facts are in `chain/market.json`: its path (`Nexus/hearth`),
+genesis and module CID.
 
 **Storage.** A host that runs a storage sponsor (lattice-sponsor
 `--sell-storage`, paid to the host's address with `--pay-to`, at a
@@ -421,7 +419,7 @@ paces the market and every chain it lists for an order (*Blocks*, above).
 Beside the node (loopback and its cookie):
 
 ```
-node host/sell-hosting.mjs --root /var/lib/lattice --market Nexus/testnet/lodger-3129cc \
+node host/sell-hosting.mjs --root /var/lib/lattice --market Nexus/hearth \
   --key host.json --offer offer.json --url https://host.example --lattice /usr/local/bin/lattice \
   [--sponsor-bin lattice-sponsor] [--sponsor-port 8650] [--sponsor-url https://host.example/sponsor] [--storage-rate 10240]
 ```
@@ -431,7 +429,7 @@ in its configuration) with a token made for it:
 
 ```
 node host/sell-hosting.mjs --node http://10.0.0.5:8090 --token-file seller.token \
-  --market Nexus/testnet/lodger-3129cc --key host.json --offer offer.json
+  --market Nexus/hearth --key host.json --offer offer.json
 ```
 
 Of the node's configuration, the seller uses these routes, and no other:
@@ -449,7 +447,7 @@ node nearly as fully as `admin` does anyway.
 `duration` in market blocks, 30 days when absent):
 
 ```json
-{ "id": "small", "parent": "Nexus/testnet", "price": 10000, "period": 1440, "duration": 43200,
+{ "id": "small", "parent": "Nexus", "price": 10000, "period": 1440, "duration": 43200,
   "capacity": 10, "maxBlockSize": 20000, "maxStateGrowth": 10000, "minTargetBlockTime": 30000,
   "maxNumberOfTransactionsPerBlock": 100, "modules": "any" }
 ```

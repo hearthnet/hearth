@@ -9,7 +9,7 @@ import * as sdk from "../vendor/lattice-sdk.js";
 import { formatOffer, isClosed, offerText, orderKey, formatPayload, parseOffer } from "../client/records.mjs";
 import { judge } from "../client/verdict.mjs";
 import { CLOCK_SLACK_MS, checkListed, checkServing, listed, live, servingWindow, serving } from "../client/service.mjs";
-import { markClosing, markReopen, nodeVersion, sellerFiles, sponsorBooks, startsReopened, sweep, sweepReserve, syncProgress } from "../host/hearth.mjs";
+import { DEFAULT_MARKET, markClosing, markReopen, nodeVersion, sellerFiles, sponsorBooks, startsReopened, sweep, sweepReserve, syncProgress } from "../host/hearth.mjs";
 import { exclusions, pacer } from "../host/pace.mjs";
 import { closedAt, closingActions, closingDone, paidTime } from "../host/stop.mjs";
 import { policyCID, SPEC as SPEC_FILE } from "./market-chain.mjs";
@@ -239,8 +239,9 @@ test("serving: the host's address credited on the chain within max(24 h, 10 T); 
 test("the node gates: GET /config says which layer lists each chain (Lattice 4.0.1), and a chain counts as synced once its tip is at the best header its peers showed", async () => {
   const fake = (config) => async (url) => (new URL(url).pathname === "/status" ? new Response(JSON.stringify({ version: "4.0.0+dev" }))
     : config ? new Response(JSON.stringify(config)) : new Response("", { status: 404 }));
-  assert.equal(await nodeVersion("http://127.0.0.1:1", fake({ status: { chains: [{ path: "Nexus", actual: "hosted", from: ["deploy"] }] } })), "4.0.0+dev", "what 4.0.1 and 4.0.2 report");
-  for (const old of [undefined, { status: {} }, { status: { chains: [{ path: "Nexus", actual: "hosted" }] } }]) {
+  assert.equal(await nodeVersion("http://127.0.0.1:1", fake({ fragments: ["lattice", "operator"], status: { chains: [{ path: "Nexus/m", actual: "hosted", from: ["operator"] }] } })), "4.0.0+dev", "a node hosting a child");
+  assert.equal(await nodeVersion("http://127.0.0.1:1", fake({ fragments: ["lattice"], status: { chains: [] } })), "4.0.0+dev", "a fresh node hosts no child, and lists no chain");
+  for (const old of [undefined, { status: {} }, { status: { chains: [] } }, { fragments: ["lattice"], status: { chains: [{ path: "Nexus/m", actual: "hosted" }] } }]) {
     await assert.rejects(nodeVersion("http://127.0.0.1:1", fake(old)), (e) => e.tooOld && /needs Lattice 5\.0\.0 or newer \(you have 4\.0\.0\+dev/.test(e.message), JSON.stringify(old));
   }
   assert.deepEqual(syncProgress({ height: "5", bestHeaderHeight: "10" }), { synced: false, height: 5n, best: 10n, line: "syncing market: 5 / 10" });
@@ -249,12 +250,12 @@ test("the node gates: GET /config says which layer lists each chain (Lattice 4.0
   assert.equal(syncProgress({ height: "0" }).synced, false);
 });
 
-test("chain/spec.json names chain/policy.wasm by its own CID (chain/market.json holds the testnet's)", () => {
+test("chain/spec.json names chain/policy.wasm by its own CID, the module the market (chain/market.json) runs", () => {
   const spec = JSON.parse(readFileSync(SPEC_FILE, "utf8"));
   assert.deepEqual(spec.wasmPolicies.map((p) => p.moduleCID), [policyCID()]);
   const market = JSON.parse(readFileSync(new URL("../chain/market.json", import.meta.url), "utf8"));
-  assert.equal(market.path, "Nexus/testnet/lodger-3129cc");
-  assert.notEqual(market.moduleCID, policyCID(), "the deployed module's bytes are not this build");
+  assert.equal(market.path, DEFAULT_MARKET);
+  assert.equal(market.moduleCID, policyCID(), "the market runs this build of policy/src");
 });
 
 

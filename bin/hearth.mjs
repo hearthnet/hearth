@@ -64,7 +64,7 @@ import { REMOTE_STORAGE, judgeOwn, report } from "../host/status.mjs";
 import { isRootCID } from "../client/records.mjs";
 import { stop } from "../host/stop.mjs";
 import { pacer } from "../host/pace.mjs";
-import { DEFAULT_SPONSOR, earn } from "../host/earn.mjs";
+import { earn } from "../host/earn.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const { name, version } = JSON.parse(readFileSync(join(HERE, "../package.json"), "utf8"));
@@ -81,7 +81,7 @@ const VERBS = {
   stop: `hearth stop [--now] [--market ${DEFAULT_MARKET}] ${NODE} [--fee <n>]`,
   unpin: "hearth unpin <cid> [--root <node root>] [--sponsor-port 8650]",
   sweep: `hearth sweep [--float 100] [--chain <path>] [--sponsor-port 8650] [--market ${DEFAULT_MARKET}] ${NODE} [--fee <n>]`,
-  earn: `hearth earn [--until <coins>] [--workers 1] [--sponsor ${DEFAULT_SPONSOR}]
+  earn: `hearth earn [--until <coins>] [--workers 1] --sponsor <url>
                    [--market ${DEFAULT_MARKET}] ${NODE}`,
   burn: `hearth burn <coin> --chain <path> [--market ${DEFAULT_MARKET}] ${NODE} [--fee <n>]`,
   "sell-coin": `hearth sell-coin <coin> --price <parent coin> [--float 100] [--again] [--sponsor-port 8650] [--market ${DEFAULT_MARKET}] ${NODE} [--fee <n>]`,
@@ -106,7 +106,7 @@ try { parsed = parseArgs({
     burn: { type: "string" }, "burn-chain": { type: "string" }, chain: { type: "string" },
     "sponsor-bin": { type: "string" }, "sponsor-port": { type: "string" }, "sponsor-url": { type: "string" }, "storage-rate": { type: "string" },
     now: { type: "boolean", default: false }, again: { type: "boolean", default: false },
-    sponsor: { type: "string", default: DEFAULT_SPONSOR }, workers: { type: "string", default: "1" }, until: { type: "string" },
+    sponsor: { type: "string" }, workers: { type: "string", default: "1" }, until: { type: "string" },
   },
 }); } catch (e) { fail(e.message); }
 const { values: a, positionals } = parsed;
@@ -344,6 +344,7 @@ if (verb === "stop") {
 
 if (verb === "earn") {
   try {
+    if (!a.sponsor) fail("--sponsor is a lattice-sponsor that pays market coin for work (its --payout-at), e.g. https://host.example:8650/sponsor");
     const { key, node, fetchImpl } = await located();
     const { address } = ensureKey(sdk, key, keyFileJSON);
     const workers = Number(a.workers);

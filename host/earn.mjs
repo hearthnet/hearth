@@ -5,7 +5,6 @@
 // the payout (`GET /earnings`). Nothing here signs anything.
 import { Worker } from "node:worker_threads";
 
-export const DEFAULT_SPONSOR = "https://lattice-testnet-apps-iad.fly.dev:8650/sponsor";
 
 // One worker: payout work, ground with the SDK, each share handed back. A
 // 429 waits its Retry-After, else a backoff that doubles to 30 s.

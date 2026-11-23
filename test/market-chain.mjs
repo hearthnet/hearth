@@ -1,5 +1,5 @@
 // The devnet market's chain: chain/spec.json running chain/policy.wasm,
-// named by that module's own CID (chain/market.json holds the testnet's).
+// named by that module's own CID (chain/market.json holds the market's).
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

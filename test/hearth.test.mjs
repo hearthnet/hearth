@@ -36,7 +36,7 @@ test("--price is coin per market blocks, or per hour, day or week at the market'
 
 test("the same flags make the same offer, with small chains' limits", () => {
   const offer = offerFromFlags({ price: "100/day" });
-  assert.deepEqual({ ...offer, id: undefined }, { id: undefined, parent: "Nexus/testnet", price: 100, period: "day", capacity: 10, maxBlockSize: 20000,
+  assert.deepEqual({ ...offer, id: undefined }, { id: undefined, parent: "Nexus", price: 100, period: "day", capacity: 10, maxBlockSize: 20000,
     maxStateGrowth: 10000, minTargetBlockTime: 30000, maxNumberOfTransactionsPerBlock: 100, modules: "any" });
   assert.equal(offerFromFlags({ price: "100/day" }).id, offer.id, "written once: the same id again");
   assert.notEqual(offerFromFlags({ price: "100/day", chains: "5" }).id, offer.id);
@@ -222,7 +222,7 @@ async function freshNode({ version = "4.0.0+dev", old = false, chains = {}, bala
         const status = path ? chains[path] : { phase: "active", height: "1", ...(version ? { version } : {}) };
         if (status) { res.writeHead(200).end(JSON.stringify(status)); return; }
       }
-      if (req.url === "/config" && !old) { res.writeHead(200).end(JSON.stringify({ status: { chains: [{ path: "Nexus", actual: "hosted", from: ["deploy"] }] } })); return; }
+      if (req.url === "/config" && !old) { res.writeHead(200).end(JSON.stringify({ fragments: ["lattice"], status: { chains: [] } })); return; }
       if (req.url === "/config/fragments/hostmarket" && req.method === "PUT") {
         puts.push({ body: JSON.parse(body), condition: req.headers["if-none-match"] ?? req.headers["if-match"] });
         fragment = body; res.writeHead(204).end(); return;
@@ -259,7 +259,7 @@ test("`hearth sell --price` beside a fresh node: makes the key, and has the node
     assert.ok(out.includes(address) && !out.includes(privateKey), "the address, never the private key");
     assert.match(out, new RegExp(`waiting for the node to host ${DEFAULT_MARKET}`));
     assert.doesNotMatch(out, /HTTP 404/, "no error while the market is not hosted yet");
-    assert.deepEqual(node.puts, [{ body: { hostedChains: ["Nexus/testnet", DEFAULT_MARKET] }, condition: "*" }]);
+    assert.deepEqual(node.puts, [{ body: { hostedChains: [DEFAULT_MARKET] }, condition: "*" }]);
     const first = join(node.root, `hearth/${offerFromFlags({ price: "100/day" }).id}.json`);
     assert.equal(JSON.parse(readFileSync(first, "utf8")).period, "day");
     const again = await hearth(["sell", "--price", "200/day", "--root", node.root, "--once", "--lattice", node.lattice, "--sponsor-bin", node.sponsor]);
@@ -294,7 +294,7 @@ test("while the node syncs the market, the seller says how far it is and asks fo
     assert.equal(code, 0, out);
     assert.match(out, /syncing market: 5 \/ 10/);
     assert.doesNotMatch(out, /Send at least|send coin|hearth earn/i);
-    assert.deepEqual(node.puts.map((p) => p.body.hostedChains), [["Nexus/testnet", DEFAULT_MARKET]], "it still has the node host the market");
+    assert.deepEqual(node.puts.map((p) => p.body.hostedChains), [[DEFAULT_MARKET]], "it still has the node host the market");
   } finally { node.close(); }
 });
 
