@@ -26,10 +26,13 @@ const SDK_TAG = "v1.0.0";
 const SDK_URL = `https://cdn.jsdelivr.net/gh/hearthnet/hearth@${SDK_TAG}/vendor/lattice-browser.js`;
 const DOCS = "https://hearthnet.github.io/";
 
-// ---- configuration: ?node=&market=&sponsor= override the mainnet defaults ----
+// ---- configuration: ?node=&entry=&market=&sponsor= override the mainnet defaults ----
 const params = new URLSearchParams(location.search);
+const MAINNET_MARKET = { path: "Nexus/hearth", genesis: "bafyreiallx3geissybbne6zlbvpovmnl7uqtsvfkwvgr3o4ii66w3xommq" };
 const cfg = {
-  node: params.get("node") ?? "https://rpc.hearthnet.io",
+  // Any node hosting Nexus: it lists the market's nodes (findNode).
+  entry: params.get("entry") ?? "https://rpc.lattice.build",
+  node: params.get("node"),
   market: params.get("market") ?? "Nexus/hearth",
   // A fee sponsor that pays out the parent's coin for work (testnet's does); none by default.
   sponsor: params.get("sponsor") ?? "",
@@ -39,6 +42,28 @@ const marketPath = cfg.market.split("/");
 const parentPath = marketPath.slice(0, -1).join("/");
 const directory = marketPath.at(-1);
 const coinName = "Hearth coin", parentCoin = `${marketPath.at(-2)} coin`;
+/**
+ * A node serving the market, found through Lattice: the entry node lists the
+ * read URLs the market's hosts declare (GET /api/chain/endpoints), and the
+ * first, in random order, whose market has the market's genesis is used.
+ * Nothing found: the entry itself, which may host the market.
+ */
+async function findNode() {
+  const get = async (base, path) => {
+    const res = await fetch(`${base}${path}?chainPath=${encodeURIComponent(cfg.market)}`, { signal: AbortSignal.timeout(8000), cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  };
+  const genesis = cfg.market === MAINNET_MARKET.path ? MAINNET_MARKET.genesis : params.get("genesis");
+  let found = [];
+  try { found = (await get(cfg.entry, "/api/chain/endpoints")).endpoints ?? []; } catch {}
+  found = found.filter((u) => /^https:\/\//.test(u)).sort(() => Math.random() - 0.5);
+  for (const url of found) {
+    try { if (!genesis || (await get(url, "/api/chain/info")).genesisHash === genesis) return url.replace(/\/$/, ""); } catch {}
+  }
+  return cfg.entry;
+}
+if (!cfg.node) cfg.node = await findNode();
 const r = reader(sdk, cfg.node);
 
 // ---- small helpers ----
@@ -1139,7 +1164,7 @@ async function viewWallet(view) {
 }
 
 // ---- start ----
-$("#foot").innerHTML = `Market chain <span class="mono">${esc(cfg.market)}</span> read from <span class="mono">${esc(cfg.node)}</span>, every record checked against its CID. Testnet coin is worth nothing: it is for testing. <a href="${DOCS}">Docs</a> · <a href="https://github.com/hearthnet/hearth">Source</a>`;
+$("#foot").innerHTML = `Market chain <span class="mono">${esc(cfg.market)}</span> read from <span class="mono">${esc(cfg.node)}</span>, every record checked against its CID. <a href="${DOCS}">Docs</a> · <a href="https://github.com/hearthnet/hearth">Source</a>`;
 renderChip();
 if (me) loadBalances();
 buying = (() => { const b = store.get("buying", null); return b ? revive(b) : null; })();
