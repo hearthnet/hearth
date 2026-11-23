@@ -274,16 +274,16 @@ test("`hearth sell` beside a node older than 4.0.1 says so and stops", async () 
   try {
     const { code, out } = await sell(node);
     assert.equal(code, 2, out);
-    assert.match(out, /Hearth needs Lattice 4\.0\.1 or newer \(you have 4\.0\.0: its GET \/config does not say which layer lists each chain\)/);
+    assert.match(out, /Hearth needs Lattice 5\.0\.0 or newer \(you have 4\.0\.0: its GET \/config does not say which layer lists each chain\)/);
     assert.deepEqual(node.puts, [], "it changes nothing on the node");
     // A 4.0.0 `lattice` has no `config`: lattice.json finds the node, only to say this.
     const old = join(temp(), "lattice");
     writeFileSync(old, "#!/bin/sh\necho \"Error: Unexpected argument 'config'\" >&2\nexit 64\n", { mode: 0o755 });
     const viaFile = await hearth(["sell", "--price", "100/day", "--root", node.root, "--once", "--lattice", old, "--sponsor-bin", node.sponsor]);
-    assert.match(viaFile.out, /Hearth needs Lattice 4\.0\.1 or newer \(you have 4\.0\.0: its GET \/config does not say which layer lists each chain\)/);
+    assert.match(viaFile.out, /Hearth needs Lattice 5\.0\.0 or newer \(you have 4\.0\.0: its GET \/config does not say which layer lists each chain\)/);
     const burnt = await hearth(["burn", "5", "--chain", DEFAULT_MARKET, "--root", node.root, "--lattice", node.lattice]);
     assert.equal(burnt.code, 2);
-    assert.match(burnt.out, /Hearth needs Lattice 4\.0\.1 or newer/);
+    assert.match(burnt.out, /Hearth needs Lattice 5\.0\.0 or newer/);
   } finally { node.close(); }
 });
 

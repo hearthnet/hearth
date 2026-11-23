@@ -241,7 +241,7 @@ test("the node gates: GET /config says which layer lists each chain (Lattice 4.0
     : config ? new Response(JSON.stringify(config)) : new Response("", { status: 404 }));
   assert.equal(await nodeVersion("http://127.0.0.1:1", fake({ status: { chains: [{ path: "Nexus", actual: "hosted", from: ["deploy"] }] } })), "4.0.0+dev", "what 4.0.1 and 4.0.2 report");
   for (const old of [undefined, { status: {} }, { status: { chains: [{ path: "Nexus", actual: "hosted" }] } }]) {
-    await assert.rejects(nodeVersion("http://127.0.0.1:1", fake(old)), (e) => e.tooOld && /needs Lattice 4\.0\.1 or newer \(you have 4\.0\.0\+dev/.test(e.message), JSON.stringify(old));
+    await assert.rejects(nodeVersion("http://127.0.0.1:1", fake(old)), (e) => e.tooOld && /needs Lattice 5\.0\.0 or newer \(you have 4\.0\.0\+dev/.test(e.message), JSON.stringify(old));
   }
   assert.deepEqual(syncProgress({ height: "5", bestHeaderHeight: "10" }), { synced: false, height: 5n, best: 10n, line: "syncing market: 5 / 10" });
   assert.equal(syncProgress({ height: "10", bestHeaderHeight: "10" }).synced, true);

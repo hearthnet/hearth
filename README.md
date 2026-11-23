@@ -21,7 +21,7 @@ Why host: to earn Hearth coin (the market's coin), which pays for hosting
 and storage from any seller. Buyers' orders pay the seller's key; the
 blocks it makes pay its sponsor's key, 1,000 coin a market block.
 
-You need a running Lattice node, **4.0.1 or newer** (`lattice up`),
+You need a running Lattice node, **5.0.0 or newer** (`lattice up`),
 lattice-sponsor on your `PATH` (see <https://lattice.build/docs/> for where
 to get it, or give `--sponsor-bin`), and Node.js 22 or later. In the node's root (or with `--root`):
 
@@ -39,7 +39,7 @@ does), else `~/.lattice` (where a bare `lattice-node` keeps its storage),
 whichever holds a running node's `chains/Nexus/.cookie`. It checks that the
 node has what it needs (`GET /config` saying which layer lists each chain,
 `status.chains[].from`, which Lattice 4.0.1 brought) and stops with "Hearth
-needs Lattice 4.0.1 or newer (you have X: ...)" beside an older one, X as
+needs Lattice 5.0.0 or newer (you have X: ...)" beside an older one, X as
 `GET /status` reports it. It makes the seller's key at
 `<root>/hearth/seller.json` (mode 0600; it prints the address, never the
 key, and refuses a key file others can read) unless there is one, has the

@@ -3,7 +3,7 @@
 //
 //   npx @hearthnet/hearth sell [--price 10000/day]
 //
-// finds the Lattice node beside it (4.0.1 or newer), makes the seller's key
+// finds the Lattice node beside it (5.0.0 or newer), makes the seller's key
 // if there is none, writes the offer from its flags, and runs
 // host/sell-hosting.mjs in the foreground, which makes the node host the
 // market and the offer's parent, makes their blocks, and runs the host's
