@@ -25,7 +25,14 @@
 //   npx @hearthnet/hearth status
 //
 // prints, once, what the seller prints each pass: both keys' balances, its
-// orders, what they paid and what it owes, and the storage pinned.
+// orders, what they paid and what it owes, the storage pinned, its coin on
+// sale and the market's cheapest coin on sale.
+//
+//   npx @hearthnet/hearth sell-coin 300000 --price 3000 [--float 100]
+//
+// locks the seller key's market coin on Lattice's exchange for a price in
+// the parent chain's coin, which a buyer pays straight to the seller's
+// address on the parent. Lattice cannot cancel it.
 //
 //   npx @hearthnet/hearth unpin <cid>
 //
@@ -47,6 +54,7 @@ import { parseArgs } from "node:util";
 import * as sdk from "../vendor/lattice-sdk.js";
 import { keyFileJSON } from "../client/tx.mjs";
 import { reader } from "../client/market.mjs";
+import { OWN_LIMIT, coinLines, exchangeOf, receiptsOf, sellCoin } from "../host/coin.mjs";
 import { CREATED_WINDOW } from "../client/records.mjs";
 import { DEFAULT_MARKET, DEFAULT_PRICE, WHY_SELL, DEFAULT_STORAGE_RATE, authedFetch, burn, burnChain, chainSync, checkRoot, checkSellFlags, ensureKey, findRoot,
   installedSeller, nodeSecret, nodeVersion, offerFromFlags, markClosing, markReopen, onPath, sponsorBooks, operatorRPC, parseAmount, rpcPort,
@@ -76,6 +84,7 @@ const VERBS = {
   earn: `hearth earn [--until <coins>] [--workers 1] [--sponsor ${DEFAULT_SPONSOR}]
                    [--market ${DEFAULT_MARKET}] ${NODE}`,
   burn: `hearth burn <coin> --chain <path> [--market ${DEFAULT_MARKET}] ${NODE} [--fee <n>]`,
+  "sell-coin": `hearth sell-coin <coin> --price <parent coin> [--float 100] [--again] [--sponsor-port 8650] [--market ${DEFAULT_MARKET}] ${NODE} [--fee <n>]`,
 };
 const USAGE = `usage: ${Object.values(VERBS).join("\n       ")}`;
 
@@ -86,7 +95,7 @@ const fail = (message) => { console.error(`hearth: ${message}`); process.exit(2)
 let parsed;
 try { parsed = parseArgs({
   args: rest,
-  allowPositionals: verb === "burn" || verb === "unpin",
+  allowPositionals: verb === "burn" || verb === "unpin" || verb === "sell-coin",
   options: {
     root: { type: "string" }, node: { type: "string" }, "token-file": { type: "string" },
     market: { type: "string", default: DEFAULT_MARKET }, key: { type: "string" }, offer: { type: "string" },
@@ -96,7 +105,7 @@ try { parsed = parseArgs({
     install: { type: "boolean", default: false }, resume: { type: "boolean", default: false }, float: { type: "string", default: "100" },
     burn: { type: "string" }, "burn-chain": { type: "string" }, chain: { type: "string" },
     "sponsor-bin": { type: "string" }, "sponsor-port": { type: "string" }, "sponsor-url": { type: "string" }, "storage-rate": { type: "string" },
-    now: { type: "boolean", default: false },
+    now: { type: "boolean", default: false }, again: { type: "boolean", default: false },
     sponsor: { type: "string", default: DEFAULT_SPONSOR }, workers: { type: "string", default: "1" }, until: { type: "string" },
   },
 }); } catch (e) { fail(e.message); }
@@ -143,6 +152,55 @@ function runningSeller(pidFile) {
   try { return execFileSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8" }).includes("sell-hosting.mjs") ? pid : undefined; } catch { return undefined; }
 }
 
+/** How to pause the seller without closing its offers (`hearth stop` closes them), then run `then`. */
+function pauseHow(then) {
+  const service = installedSeller({ platform: process.platform, home: homedir() });
+  return service ? `stop its service (${process.platform === "darwin" ? `launchctl bootout gui/$(id -u)/net.hearth.seller` : "systemctl --user stop hearth.service"}), `
+    + `run ${then}, then start it again (${process.platform === "darwin" ? `launchctl bootstrap gui/$(id -u) ${service.file}` : "systemctl --user start hearth.service"})`
+    : `stop it (Ctrl-C, or kill its pid), run ${then}, then start it again with the same hearth sell flags and --resume`;
+}
+
+/** `fetchImpl` with a deadline on each read: a report or a one-off write never waits on a stuck node. */
+const timed = (authed) => (input, init = {}) => authed(input, { ...init, signal: AbortSignal.timeout(15_000) })
+  .catch((e) => { throw e.name === "TimeoutError" ? new Error(`${new URL(input).pathname}: no answer from the node within 15 s`) : e; });
+
+if (verb === "sell-coin") {
+  // Every amount checked before the node is asked anything.
+  try {
+    if (positionals.length !== 1 || !a.price) fail("hearth sell-coin <coin> --price <parent coin>: how much market coin to lock, and what a buyer pays for all of it");
+    const amount = parseAmount(positionals[0], "the amount");
+    const price = parseAmount(a.price, "--price");
+    const float = parseAmount(a.float, "--float");
+    if (a.fee !== undefined) parseAmount(a.fee, "--fee");
+    const port = a["sponsor-port"] ?? "8650";
+    if (!/^[1-9][0-9]*$/.test(port)) fail(`--sponsor-port is a port, not ${port}`);
+    const { parent } = exchangeOf(a.market);
+    const { root, key, node, fetchImpl: authed } = await located();
+    const privateKey = readKey(key);
+    // The seller and its lattice-sponsor sign with these keys: two signers would race for the nonce.
+    const pid = runningSeller(sellerFiles({ root, key }).pid);
+    if (pid) fail(`the seller (pid ${pid}) signs with the seller's key, and two signers would race for its nonces: ${pauseHow("hearth sell-coin")}. Its offers stay on sale meanwhile (hearth stop would close them).`);
+    if (await sponsorAnswers(port)) fail(`a lattice-sponsor answers on port ${port}: stop it before selling coin (the seller runs it beside its keys), or give --sponsor-port`);
+    // Every read has a deadline; once the market is synced, so has the whole.
+    const fetchImpl = timed(authed);
+    await nodeVersion(node, fetchImpl);
+    await waitSynced(node, a.market, { fetchImpl, label: "market" });
+    setTimeout(() => fail("no answer from the node within 120 s: is it running, and not overloaded? Run hearth status before trying again: the deposit may have been sent"), 120_000).unref();
+    const done = await sellCoin({ sdk, node, fetchImpl, privateKey, market: a.market, amount, price, float, fee: a.fee, again: a.again });
+    if (done.existing) {
+      const e = done.existing;
+      console.log(`already on sale: ${e.amountDeposited} market coin for ${e.amountDemanded} ${parent} coin, deposit ${e.key}. Nothing sent: a deposit can't be cancelled, so a second one is locked only with --again.`);
+      process.exit(0);
+    }
+    const d = done.deposit;
+    console.log(`locked ${d.amountDeposited} market coin on ${a.market} for sale at ${d.amountDemanded} ${parent} coin: deposit ${d.demander}/${d.amountDemanded}/${d.nonce}\ntransaction ${done.tx}\n`
+      + `A buyer pays ${d.amountDemanded} ${parent} coin (and that chain's fee) on ${parent}; Lattice credits it straight to ${d.demander} there, with nothing to claim, and the buyer takes the coin. `
+      + "Buyers find it on Hearth's Buy coin page, and hearth status lists it once it is in a block.\n"
+      + `A deposit cannot be cancelled: Lattice has no cancel or refund. Until someone buys it, the only way back is to buy it yourself like any buyer, paying its price to your own address on ${parent} (a fee on each chain).`);
+  } catch (e) { fail(e.message); }
+  process.exit(0);
+}
+
 if (verb === "sweep") {
   try {
     const { root, key, node, fetchImpl } = await located();
@@ -151,11 +209,7 @@ if (verb === "sweep") {
     if (!existsSync(sponsorKey)) fail(`no sponsor key at ${sponsorKey}`);
     // lattice-sponsor signs with the same key: two signers would race for its nonces.
     const pid = runningSeller(sellerFiles({ root, key }).pid);
-    // How to pause the seller without closing its offers (`hearth stop` closes them).
-    const service = installedSeller({ platform: process.platform, home: homedir() });
-    const pause = service ? `stop its service (${process.platform === "darwin" ? `launchctl bootout gui/$(id -u)/net.hearth.seller` : "systemctl --user stop hearth.service"}), `
-      + `run hearth sweep, then start it again (${process.platform === "darwin" ? `launchctl bootstrap gui/$(id -u) ${service.file}` : "systemctl --user start hearth.service"})`
-      : "stop it (Ctrl-C, or kill its pid), run hearth sweep, then start it again with the same hearth sell flags and --resume";
+    const pause = pauseHow("hearth sweep");
     if (pid) fail(`the seller (pid ${pid}) runs lattice-sponsor with the sponsor's key, and two signers would race for its nonces: ${pause}. `
       + "Its offers stay on sale meanwhile (hearth stop would close them). The seller funds its first writes from the sponsor's key by itself.");
     const port = a["sponsor-port"] ?? "8650";
@@ -177,8 +231,7 @@ if (verb === "status") {
   setTimeout(() => fail("no answer from the node within 120 s: is it running, and not overloaded?"), 120_000).unref();
   try {
     const { root, key, node, fetchImpl: authed } = await located();
-    const fetchImpl = (input, init = {}) => authed(input, { ...init, signal: AbortSignal.timeout(15_000) })
-      .catch((e) => { throw e.name === "TimeoutError" ? new Error(`${new URL(input).pathname}: no answer from the node within 15 s`) : e; });
+    const fetchImpl = timed(authed);
     const self = sdk.accountFromPrivateKey(readKey(key)).address;
     const sponsorKey = join(dirname(key), "sponsor.json");
     if (!existsSync(sponsorKey)) fail(`no sponsor key at ${sponsorKey}: hearth sell makes it`);
@@ -197,6 +250,14 @@ if (verb === "status") {
     const [seller, sponsor] = await Promise.all([n.account(a.market, self), n.account(a.market, sponsorAddress)]);
     console.log(report({ market: a.market, height: m.height, seller: { address: self, balance: seller.balance }, sponsor: { address: sponsorAddress, balance: sponsor.balance },
       ...own, storage: root ? await sponsorStorage(a["sponsor-port"] ?? "8650") : REMOTE_STORAGE }).join("\n"));
+    // The exchange: the seller's coin on sale, and the price it competes with.
+    const { parent, directory } = exchangeOf(a.market);
+    // Bounded reads: a page of the market's deposits for the cheapest, the seller's own by its key prefix.
+    const [deposits, mine] = await Promise.all([n.deposits(a.market), n.deposits(a.market, { prefix: `${self}/`, limit: OWN_LIMIT })]);
+    const paidBy = await receiptsOf({ n, parent, directory, deposits: mine });
+    console.log(coinLines({ market: a.market, deposits, mine, paidBy }).join("\n"));
+    const paid = await n.account(parent, self).catch(() => undefined);
+    if (paid) console.log(`the seller's key holds ${paid.balance} on ${parent}, where buyers of its coin pay it`);
     const pid = root && runningSeller(sellerFiles({ root, key }).pid);
     if (root) console.log(pid ? `the seller runs (pid ${pid})${existsSync(sellerFiles({ root, key }).closing) ? ", closing" : ""}` : "no seller runs beside this node");
   } catch (e) { fail(e.message); }

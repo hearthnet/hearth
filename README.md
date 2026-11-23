@@ -290,6 +290,33 @@ again. It reads the key's nonce and the burned total at the same block. Until th
 each pass sends the same transaction (same nonce, same amount), which can
 land only once.
 
+### Selling the coin you earn
+
+Hosting earns the market's coin (Hearth coin): orders pay the seller's key,
+and blocks pay its sponsor's key (`hearth sweep` moves that to the seller's).
+Spend it on hosting or storage, or sell it on Lattice's own exchange, where
+buyers find it on the app's Buy coin page.
+
+```
+npx @hearthnet/hearth sell-coin 300000 --price 3000 [--float 100]
+```
+
+`hearth sell-coin <coin> --price <parent coin>` locks `<coin>` of the seller
+key's market coin as a Lattice deposit demanding `<parent coin>` on the
+market's parent (Nexus/testnet for the default market), for all of it. It
+checks every amount, and refuses to leave the key less than `--float` for its
+fees, before it signs. Like `hearth sweep`, it refuses while the seller or
+a lattice-sponsor on `--sponsor-port` runs. A retry that finds an open
+deposit of the same amount and price prints it and sends nothing (`--again`
+locks another). The deposit's nonce is the key's account nonce, so its
+identity is new and sending it again is the same transaction. A buyer's
+payment on the parent credits the seller's own address there directly:
+nothing to claim. `hearth status` lists, in bounded reads, the key's deposits (and who paid for
+each, until they take the coin), the market's cheapest coin on sale, and the
+key's parent-chain balance. Lattice has no cancel or refund: an unsold
+deposit comes back only the way any buyer takes it, the seller paying its
+price to its own address on the parent (a fee on each chain).
+
 ## How it works
 
 **Buying coin.** Hosts are paid in the market chain's own coin. Sellers lock
@@ -443,8 +470,8 @@ host stores rather than relays; a record of past uptime.
 ```
 cd policy && RUSTFLAGS="--remap-path-prefix=$HOME=/home --remap-path-prefix=$PWD=/hearth/policy" \
   cargo build --release --target wasm32-unknown-unknown && node --test test/policy.test.mjs
-npm test                                                               # verdicts, storage, hearth sell, the pacer, stop, earn, burns
-LATTICE=<lattice-node>/.build/debug/lattice node test/e2e.mjs          # buy coin, order, launch, void, lapse
+npm test                                                               # verdicts, storage, hearth sell, the pacer, stop, earn, burns, sell-coin
+LATTICE=<lattice-node>/.build/debug/lattice node test/e2e.mjs          # sell-coin, buy coin, order, launch, void, lapse
 LATTICE=<lattice-node>/.build/debug/lattice node test/e2e-commit.mjs   # a buyer commits its own chain's blocks
 LATTICE=<lattice-node>/.build/debug/lattice SPONSOR=<lattice-sponsor>/.build/debug/lattice-sponsor \
   node test/e2e-seller.mjs                                             # hearth sell paces and sponsors; hearth stop
