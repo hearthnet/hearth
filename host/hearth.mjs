@@ -48,7 +48,7 @@ export const DEFAULT_STORAGE_RATE = 10240;
  */
 export const DEFAULT_STORAGE_BUDGET = 256 * 2 ** 20;
 /** The oldest node Hearth runs beside (`nodeVersion` checks what it brought, not this string). */
-export const MIN_NODE = "4.0.1";
+export const MIN_NODE = "5.0.0";
 const depth = (path) => path.split("/").length;
 /** Paths without repeats, parents first. */
 export const ordered = (paths) => [...new Set(paths)].sort((a, b) => depth(a) - depth(b) || (a < b ? -1 : 1));
