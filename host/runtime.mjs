@@ -5,7 +5,7 @@
 
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** Where each tool's release tarball is: a URL template with {version} and {platform}. */
@@ -104,45 +104,93 @@ export function initManagedNode({ home, lattice }) {
   return root;
 }
 
-/** Whether a node runs at `root`: its cookie is there and its operator port answers (a cookie outlives a crash). */
+/**
+ * Whether a node runs at `root`: its cookie is there (a cookie outlives a
+ * crash) and its operator port answers as a node does without the cookie.
+ */
 export async function nodeAnswers(root, fetchImpl = (...a) => fetch(...a)) {
   if (!existsSync(join(root, "chains/Nexus/.cookie"))) return false;
   let port = 8080;
   try { port = JSON.parse(readFileSync(join(root, "lattice.json"), "utf8")).rpc ?? port; } catch {}
-  try { await fetchImpl(`http://127.0.0.1:${port}/status`, { signal: AbortSignal.timeout(2_000) }); return true; } catch { return false; }
+  try {
+    const res = await fetchImpl(`http://127.0.0.1:${port}/status`, { signal: AbortSignal.timeout(2_000) });
+    return res.status === 401 && /requires the node's cookie/.test(await res.text());
+  } catch { return false; }
 }
 
 const tail = (file) => { try { return readFileSync(file, "utf8").trimEnd().split("\n").slice(-5).join("\n"); } catch { return ""; } };
 
+// The nodes this process runs: stopped when it exits, or dies of a signal
+// nothing else here handles (Ctrl-C reaches them anyway, in its process group).
+const owned = new Set();
+let watching = false;
+function watchExit() {
+  if (watching) return;
+  watching = true;
+  process.on("exit", () => { for (const stop of owned) stop(); });
+  for (const [signal, n] of [["SIGINT", 2], ["SIGTERM", 15], ["SIGHUP", 1]]) {
+    process.on(signal, () => {
+      for (const stop of owned) stop();
+      if (process.listenerCount(signal) === 1) process.exit(128 + n);
+    });
+  }
+}
+
 /**
  * The node Hearth runs, at `managedRoot(home)`: the one already running there
- * (another hearth command's), else one this process starts and runs as its
- * child until `stop()` or this process exits (`lattice up` exits 75 to be
- * started again). Resolves once it answers.
+ * (another hearth command's: `owned` false), else one this process starts and
+ * runs as its child until `stop()` or this process ends (`lattice up` exits
+ * 75 to be started again). Resolves once it answers.
  */
 export async function runManagedNode({ home, lattice, log = console.log, timeoutMs = 180_000, pollMs = 500 }) {
   const root = initManagedNode({ home, lattice });
-  if (await nodeAnswers(root)) return { root, stop: () => {} };
+  if (await nodeAnswers(root)) return { root, stop: () => {}, owned: false };
   const logFile = join(root, "node.log");
   let child, exited, stopping = false;
   const start = () => {
     const out = openSync(logFile, "a");
     exited = undefined;
     child = spawn(lattice, ["up", "--root", root], { stdio: ["ignore", out, out] });
+    closeSync(out);
     child.on("exit", (code) => {
       exited = code ?? 1;
       if (code === 75 && !stopping) start();
     });
   };
-  const stop = () => { stopping = true; child?.kill("SIGTERM"); };
+  const stop = () => { stopping = true; owned.delete(stop); child?.kill("SIGTERM"); };
+  watchExit();
+  owned.add(stop);
   start();
-  process.on("exit", stop);
   log(`started the node in ${root} (its log: ${logFile}); it stops when this command does`);
   for (const end = Date.now() + timeoutMs; Date.now() < end;) {
-    if (await nodeAnswers(root)) return { root, stop };
+    if (await nodeAnswers(root)) return { root, stop, owned: true };
     if (exited !== undefined && exited !== 75) break;
     await new Promise((r) => setTimeout(r, pollMs));
   }
   stop();
   throw new Error(`the node in ${root} did not start; the end of ${logFile}:\n${tail(logFile)}`);
+}
+
+/**
+ * The node `hearth sell` sells from, kept up for as long as it sells: checked
+ * every `everyMs`, and started again (by this process) whenever it stops
+ * answering: it crashed, or the command that started it ended. `stop()` ends both.
+ */
+export async function keepManagedNode({ home, lattice, log = console.log, everyMs = 5_000 }) {
+  let current = await runManagedNode({ home, lattice, log });
+  const { root } = current;
+  let busy = false, stopped = false;
+  const timer = setInterval(async () => {
+    if (busy || stopped) return;
+    busy = true;
+    try {
+      if (!(await nodeAnswers(root)) && !stopped) {
+        log(`the node in ${root} stopped answering: starting it again`);
+        current = await runManagedNode({ home, lattice, log });
+        if (stopped) current.stop();
+      }
+    } catch (e) { log(e.message); } finally { busy = false; }
+  }, everyMs);
+  timer.unref();
+  return { root, stop: () => { stopped = true; clearInterval(timer); current.stop(); } };
 }

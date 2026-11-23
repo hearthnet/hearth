@@ -60,7 +60,7 @@ import { DEFAULT_MARKET, DEFAULT_PRICE, WHY_SELL, DEFAULT_STORAGE_RATE, authedFe
   installedSeller, nodeSecret, nodeVersion, offerFromFlags, markClosing, markReopen, onPath, sponsorBooks, operatorRPC, parseAmount, rpcPort,
   sellerFiles, serviceUnits, sweep, waitSynced } from "../host/hearth.mjs";
 import { sponsorAnswers, sponsorBinary, sponsorStorage, unpin } from "../host/sponsor.mjs";
-import { initManagedNode, installTools, managedRoot, nodeAnswers, runManagedNode } from "../host/runtime.mjs";
+import { initManagedNode, installTools, keepManagedNode, managedRoot, nodeAnswers, runManagedNode } from "../host/runtime.mjs";
 import { REMOTE_STORAGE, judgeOwn, report } from "../host/status.mjs";
 import { isRootCID } from "../client/records.mjs";
 import { stop } from "../host/stop.mjs";
@@ -137,6 +137,8 @@ async function nodeRoot({ create = false, install = false } = {}) {
   if (!create && !existsSync(join(root, "hearth/seller.json"))) fail("nothing is sold from this machine yet: run hearth sell (or give --root, or --node with --token-file)");
   a.lattice ??= (await tools()).lattice;
   if (install) return initManagedNode({ home, lattice: a.lattice });
+  // The seller keeps its node up; another verb runs it for as long as it takes.
+  if (create) return (await keepManagedNode({ home, lattice: a.lattice })).root;
   return (await runManagedNode({ home, lattice: a.lattice })).root;
 }
 
@@ -325,6 +327,11 @@ if (verb === "stop") {
       if (pid) {
         try { process.kill(pid, "SIGTERM"); for (let i = 0; i < 100; i++) { process.kill(pid, 0); await new Promise((r) => setTimeout(r, 100)); } } catch {}
         console.log(`stopped the seller (pid ${pid}), its pacer and its sponsor`);
+        // Hearth's node stops with the seller that ran it: this verb runs it now.
+        if (root === managedRoot(homedir())) {
+          for (let i = 0; i < 40 && await nodeAnswers(root); i++) await new Promise((r) => setTimeout(r, 500));
+          await runManagedNode({ home: homedir(), lattice: a.lattice });
+        }
       }
       pid = undefined;
       rmSync(files.reopen, { force: true });

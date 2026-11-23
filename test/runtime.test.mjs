@@ -101,3 +101,68 @@ esac
   chmodSync(lattice, 0o755);
   await assert.rejects(runManagedNode({ home, lattice, log: () => {}, pollMs: 50 }), /did not start; the end of .*node\.log:\nlisten 0\.0\.0\.0:4001: address already in use/);
 });
+
+/** A stand-in node: `init` writes lattice.json (rpc `port`), `up` writes the cookie and answers as a node does until SIGTERM, its pid in <root>/up.pid. */
+function fakeLattice(port) {
+  const dir = temp();
+  const file = join(dir, "lattice");
+  writeFileSync(file, `#!${process.execPath}
+const fs = require("node:fs"), http = require("node:http"), path = require("node:path");
+const [verb, , root] = process.argv.slice(2);
+if (verb === "init") { fs.mkdirSync(root, { recursive: true }); fs.writeFileSync(path.join(root, "lattice.json"), JSON.stringify({ rpc: ${port} })); process.exit(0); }
+fs.mkdirSync(path.join(root, "chains/Nexus"), { recursive: true });
+fs.writeFileSync(path.join(root, "up.pid"), String(process.pid));
+http.createServer((q, r) => { r.statusCode = 401; r.end(JSON.stringify({ error: { message: "operator RPC requires the node's cookie" } })); })
+  .listen(${port}, "127.0.0.1", () => fs.writeFileSync(path.join(root, "chains/Nexus/.cookie"), "c"));
+process.on("SIGTERM", () => { fs.rmSync(path.join(root, "chains/Nexus/.cookie"), { force: true }); process.exit(0); });
+`);
+  chmodSync(file, 0o755);
+  return file;
+}
+const freePort = () => new Promise(async (ok) => { const s = (await import("node:net")).createServer().listen(0, "127.0.0.1", () => { const { port } = s.address(); s.close(() => ok(port)); }); });
+
+test("only a node's own answer counts: another server on the port is no node", async () => {
+  const http = await import("node:http");
+  const root = temp();
+  mkdirSync(join(root, "chains/Nexus"), { recursive: true });
+  writeFileSync(join(root, "chains/Nexus/.cookie"), "c");
+  const other = http.createServer((q, r) => { r.statusCode = 404; r.end("not here"); }).listen(0, "127.0.0.1");
+  await new Promise((r) => other.once("listening", r));
+  writeFileSync(join(root, "lattice.json"), JSON.stringify({ rpc: other.address().port }));
+  try { assert.equal(await nodeAnswers(root), false); } finally { other.closeAllConnections(); other.close(); }
+});
+
+test("the node hearth sell keeps is started again when it dies", async () => {
+  const { keepManagedNode } = await import("../host/runtime.mjs");
+  const home = temp();
+  const lattice = fakeLattice(await freePort());
+  const kept = await keepManagedNode({ home, lattice, log: () => {}, everyMs: 200 });
+  const { root } = kept;
+  const first = Number(readFileSync(join(root, "up.pid"), "utf8"));
+  process.kill(first, "SIGKILL");
+  let again;
+  for (let i = 0; i < 100 && !again; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    const pid = Number(readFileSync(join(root, "up.pid"), "utf8"));
+    if (pid !== first && await nodeAnswers(root)) again = pid;
+  }
+  assert.ok(again, "a new node answers");
+  kept.stop();
+});
+
+test("a hearth process ended by SIGTERM stops the node it started", async () => {
+  const { spawn } = await import("node:child_process");
+  const home = temp();
+  const lattice = fakeLattice(await freePort());
+  const runtime = new URL("../host/runtime.mjs", import.meta.url).href;
+  const p = spawn(process.execPath, ["--input-type=module", "-e", `const r = await import(${JSON.stringify(runtime)}); await r.runManagedNode({ home: ${JSON.stringify(home)}, lattice: ${JSON.stringify(lattice)}, log: () => console.log("up") }); setInterval(() => {}, 1000);`]);
+  await new Promise((r) => p.stdout.once("data", r));
+  const root = join(home, ".hearth/node");
+  for (let i = 0; i < 50 && !(await nodeAnswers(root)); i++) await new Promise((r) => setTimeout(r, 100));
+  const node = Number(readFileSync(join(root, "up.pid"), "utf8"));
+  p.kill("SIGTERM");
+  await new Promise((r) => p.once("exit", r));
+  let gone = false;
+  for (let i = 0; i < 50 && !gone; i++) { await new Promise((r) => setTimeout(r, 100)); try { process.kill(node, 0); } catch { gone = true; } }
+  assert.ok(gone, "the node is gone");
+});
