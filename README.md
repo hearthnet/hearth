@@ -305,10 +305,13 @@ npx @hearthnet/hearth sell-coin 300000 --price 3000 [--float 100]
 key's market coin as a Lattice deposit demanding `<parent coin>` on the
 market's parent (Nexus/testnet for the default market), for all of it. It
 checks every amount, and refuses to leave the key less than `--float` for its
-fees, before it signs. The deposit's nonce is the key's account nonce, so its
+fees, before it signs. Like `hearth sweep`, it refuses while the seller or
+a lattice-sponsor on `--sponsor-port` runs. A retry that finds an open
+deposit of the same amount and price prints it and sends nothing (`--again`
+locks another). The deposit's nonce is the key's account nonce, so its
 identity is new and sending it again is the same transaction. A buyer's
 payment on the parent credits the seller's own address there directly:
-nothing to claim. `hearth status` lists the key's deposits (and who paid for
+nothing to claim. `hearth status` lists, in bounded reads, the key's deposits (and who paid for
 each, until they take the coin), the market's cheapest coin on sale, and the
 key's parent-chain balance. Lattice has no cancel or refund: an unsold
 deposit comes back only the way any buyer takes it, the seller paying its

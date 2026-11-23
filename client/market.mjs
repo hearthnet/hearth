@@ -98,14 +98,25 @@ export function reader(sdk, node, { fetchImpl = (...a) => fetch(...a), cache } =
         urlValues: new Map(urls.map(([key, value]) => [key.slice("url/".length), value])), orders, renewals };
     },
 
-    /** Open deposits on `chainPath`: coin locked there for a payment on its parent. */
-    async deposits(chainPath) {
+    /**
+     * Open deposits on `chainPath`: coin locked there for a payment on its
+     * parent. A bounded read: at most `limit` entries of deposit state (spent
+     * ones, kept as a zero marker, count too), in key order, of the keys
+     * starting with `prefix` (`<demander>/` reads one seller's). The array's
+     * `complete` is false when it stopped at `limit`.
+     */
+    async deposits(chainPath, { prefix = "", limit = 1000 } = {}) {
       const t = await tip(chainPath);
-      return (await entries(t.state.depositStateCID, "")).flatMap(([key, value]) => {
+      const out = [];
+      out.complete = true;
+      let read = 0;
+      for await (const [key, value] of list(load, t.state.depositStateCID, prefix)) {
+        if (read++ >= limit) { out.complete = false; break; }
         const [demander, amountDemanded, nonce] = key.split("/");
         const amountDeposited = BigInt(value);
-        return amountDeposited > 0n ? [{ demander, amountDemanded: BigInt(amountDemanded), nonce: BigInt(nonce), amountDeposited, key }] : [];
-      });
+        if (amountDeposited > 0n) out.push({ demander, amountDemanded: BigInt(amountDemanded), nonce: BigInt(nonce), amountDeposited, key });
+      }
+      return out;
     },
 
     /** Whether a deposit is still open (its amount) on `chainPath`: 0n once withdrawn, undefined if absent. */

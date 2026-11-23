@@ -101,6 +101,8 @@ try {
   say(sellCoin(4000, 2000).trim());
   const deposit = await until("the deposit listed", () => mine(4000n));
   assert.equal(deposit.amountDemanded, 2000n);
+  assert.match(sellCoin(4000, 2000), /^already on sale: .*Nothing sent/m, "a retry locks no second deposit");
+  assert.equal((await r.deposits(MARKET, { prefix: `${seller.address}/` })).length, 1);
   const sellerParentBefore = await balance("Nexus/testnet", seller.address);
   await send(buyer, async () => receiptBody({ buyer: buyer.address, nonce: await nonce("Nexus/testnet", buyer), parentPath: ["Nexus", "testnet"], directory: "hosts", deposit, fee }), "receipt");
   await until("the receipt on the parent", async () => (await r.receipt("Nexus/testnet", "hosts", deposit)) === buyer.address);
