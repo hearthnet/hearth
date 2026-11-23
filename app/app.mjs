@@ -46,19 +46,21 @@ const coinName = "Hearth coin", parentCoin = `${marketPath.at(-2)} coin`;
  * A node serving the market, found through Lattice: the SDK's resolver asks
  * the entry for the read URLs the market's hosts declare, and keeps those on
  * the entry's network that serve the market (all probed at once, each with
- * a timeout). Of those that take transactions, the first in random order
- * whose market has the market's genesis is used. None: the entry itself.
+ * a timeout). The fastest whose market has the market's genesis is used, one
+ * that takes transactions before one that only serves reads; none, the entry.
  */
 async function findNode() {
   const market = cfg.market.split("/");
   const genesis = cfg.market === MAINNET_MARKET.path ? MAINNET_MARKET.genesis : params.get("genesis");
   let hosts = [];
   try { hosts = await new sdk.EndpointResolver(new sdk.NodeClient(cfg.entry, ["Nexus"])).resolve(market, AbortSignal.timeout(10_000)); } catch {}
-  const checks = hosts.filter((h) => h.declaresSubmit).sort(() => Math.random() - 0.5).map(async ({ url }) => {
+  const fastest = (some) => Promise.any(some.map(async ({ url }) => {
     if (genesis && (await new sdk.NodeClient(url, market).chainInfo(AbortSignal.timeout(5_000))).genesisHash !== genesis) throw new Error("another chain");
     return url;
-  });
-  try { return await Promise.any(checks); } catch { return cfg.entry; }
+  }));
+  try { return await fastest(hosts.filter((h) => h.declaresSubmit)); } catch {}
+  try { return await fastest(hosts.filter((h) => !h.declaresSubmit)); } catch {}
+  return cfg.entry;
 }
 if (!cfg.node) cfg.node = await findNode();
 const r = reader(sdk, cfg.node);

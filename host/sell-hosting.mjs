@@ -360,15 +360,17 @@ async function pass() {
   // The market and the offer's parent first: a fresh node reads neither yet.
   {
     const { fragment, condition } = await readFragment();
-    // Chains listed for another market: rewriting the list for this one
-    // would let go of what that market's buyers paid for. A list `hearth
-    // stop` left (the chains still paid for, under this seller's parent)
-    // is this market's.
+    // A list kept for another market: rewriting it for this one would let
+    // go of what that market's buyers paid for. Whose list it is, the seller
+    // wrote down (files.market) before it first wrote the list; with no note
+    // (Hearth 1.0.0), a list naming this market is its own.
     const hosted = fragment.hostedChains ?? [];
-    const foreign = hosted.includes(marketPath) ? [] : hosted.filter((p) => !own().includes(p) && !parents().includes(parentOf(p)));
-    if (foreign.length) {
-      throw Object.assign(new Error(`this node hosts ${foreign.join(" ")} for another market, not ${marketPath}: give --market <that market> (and its --parent) to keep selling there`), { fatal: true });
+    const noted = existsSync(files.market) ? readFileSync(files.market, "utf8").trim() : undefined;
+    const theirs = noted ?? (hosted.length && !hosted.includes(marketPath) ? "another market" : undefined);
+    if (hosted.length && theirs !== undefined && theirs !== marketPath) {
+      throw Object.assign(new Error(`this node hosts ${hosted.join(" ")} for ${theirs}, not ${marketPath}: give --market ${noted ?? "<that market>"} to keep selling there`), { fatal: true });
     }
+    if (noted !== marketPath) writeFileSync(files.market, marketPath + "\n");
     const missing = own().filter((p) => !hosted.includes(p));
     if (missing.length) {
       await rpc(FRAGMENT, { ...fragment, hostedChains: ordered([...(fragment.hostedChains ?? []), ...missing]) }, "PUT", condition);

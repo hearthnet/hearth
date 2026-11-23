@@ -292,17 +292,43 @@ test("a node hosting chains for another market: hearth sell names it, and writes
   try {
     const { code, out } = await sell(node);
     assert.equal(code, 2, out);
-    assert.match(out, /hosts Nexus\/testnet\/lodger-3129cc Nexus\/testnet\/app1 for another market, not Nexus\/hearth: give --market/);
+    assert.match(out, /hosts Nexus\/testnet Nexus\/testnet\/lodger-3129cc Nexus\/testnet\/app1 for another market, not Nexus\/hearth: give --market <that market>/);
     assert.deepEqual(node.puts, []);
   } finally { node.close(); }
 });
 
-test("after hearth stop left only the chains still paid for, hearth sell on the same market hosts it again", async () => {
-  const node = await freshNode({ hosted: ["Nexus/app1"] });
+test("after hearth stop left only the chains still paid for, hearth sell on the market it noted hosts it again", async () => {
+  const node = await freshNode({ hosted: ["Nexus/old/app1"] });
   try {
+    mkdirSync(join(node.root, "hearth"), { recursive: true });
+    writeFileSync(join(node.root, "hearth/market"), `${DEFAULT_MARKET}\n`);
     const { code, out } = await sell(node);
     assert.equal(code, 0, out);
-    assert.deepEqual(node.puts.map((p) => p.body.hostedChains), [["Nexus/app1", DEFAULT_MARKET]]);
+    assert.deepEqual(node.puts.map((p) => p.body.hostedChains), [[DEFAULT_MARKET, "Nexus/old/app1"]], "kept, though its parent is not the offer's now");
+  } finally { node.close(); }
+});
+
+test("a list kept for the market the seller noted before is not this market's, whatever its paths", async () => {
+  for (const [noted, hosted, says] of [
+    ["Nexus/testnet/lodger-3129cc", ["Nexus/app1"], /hosts Nexus\/app1 for Nexus\/testnet\/lodger-3129cc, not Nexus\/hearth: give --market Nexus\/testnet\/lodger-3129cc/],
+    [undefined, ["Nexus/app1"], /hosts Nexus\/app1 for another market, not Nexus\/hearth/],
+  ]) {
+    const node = await freshNode({ hosted });
+    try {
+      if (noted) { mkdirSync(join(node.root, "hearth"), { recursive: true }); writeFileSync(join(node.root, "hearth/market"), `${noted}\n`); }
+      const { code, out } = await sell(node);
+      assert.equal(code, 2, out);
+      assert.match(out, says);
+      assert.deepEqual(node.puts, []);
+    } finally { node.close(); }
+  }
+});
+
+test("the seller notes its market before it first writes the list", async () => {
+  const node = await freshNode();
+  try {
+    await sell(node);
+    assert.equal(readFileSync(join(node.root, "hearth/market"), "utf8"), `${DEFAULT_MARKET}\n`);
   } finally { node.close(); }
 });
 

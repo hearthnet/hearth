@@ -556,7 +556,7 @@ export function installedSeller({ platform, home }) {
  */
 export const sellerFiles = ({ root, key }) => {
   const dir = root ? join(root, "hearth") : dirname(key);
-  return { dir, pid: join(dir, "seller.pid"), closing: join(dir, "closing"), reopen: join(dir, "reopen") };
+  return { dir, pid: join(dir, "seller.pid"), closing: join(dir, "closing"), reopen: join(dir, "reopen"), market: join(dir, "market") };
 };
 
 /**
