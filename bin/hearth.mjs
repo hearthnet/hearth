@@ -25,7 +25,14 @@
 //   npx @hearthnet/hearth status
 //
 // prints, once, what the seller prints each pass: both keys' balances, its
-// orders, what they paid and what it owes, and the storage pinned.
+// orders, what they paid and what it owes, the storage pinned, its coin on
+// sale and the market's cheapest coin on sale.
+//
+//   npx @hearthnet/hearth sell-coin 300000 --price 3000 [--float 100]
+//
+// locks the seller key's market coin on Lattice's exchange for a price in
+// the parent chain's coin, which a buyer pays straight to the seller's
+// address on the parent. Lattice cannot cancel it.
 //
 //   npx @hearthnet/hearth unpin <cid>
 //
@@ -47,6 +54,7 @@ import { parseArgs } from "node:util";
 import * as sdk from "../vendor/lattice-sdk.js";
 import { keyFileJSON } from "../client/tx.mjs";
 import { reader } from "../client/market.mjs";
+import { coinLines, exchangeOf, sellCoin } from "../host/coin.mjs";
 import { CREATED_WINDOW } from "../client/records.mjs";
 import { DEFAULT_MARKET, DEFAULT_PRICE, WHY_SELL, DEFAULT_STORAGE_RATE, authedFetch, burn, burnChain, chainSync, checkRoot, checkSellFlags, ensureKey, findRoot,
   installedSeller, nodeSecret, nodeVersion, offerFromFlags, markClosing, markReopen, onPath, sponsorBooks, operatorRPC, parseAmount, rpcPort,
@@ -76,6 +84,7 @@ const VERBS = {
   earn: `hearth earn [--until <coins>] [--workers 1] [--sponsor ${DEFAULT_SPONSOR}]
                    [--market ${DEFAULT_MARKET}] ${NODE}`,
   burn: `hearth burn <coin> --chain <path> [--market ${DEFAULT_MARKET}] ${NODE} [--fee <n>]`,
+  "sell-coin": `hearth sell-coin <coin> --price <parent coin> [--float 100] [--market ${DEFAULT_MARKET}] ${NODE} [--fee <n>]`,
 };
 const USAGE = `usage: ${Object.values(VERBS).join("\n       ")}`;
 
@@ -86,7 +95,7 @@ const fail = (message) => { console.error(`hearth: ${message}`); process.exit(2)
 let parsed;
 try { parsed = parseArgs({
   args: rest,
-  allowPositionals: verb === "burn" || verb === "unpin",
+  allowPositionals: verb === "burn" || verb === "unpin" || verb === "sell-coin",
   options: {
     root: { type: "string" }, node: { type: "string" }, "token-file": { type: "string" },
     market: { type: "string", default: DEFAULT_MARKET }, key: { type: "string" }, offer: { type: "string" },
@@ -132,6 +141,29 @@ if (verb === "burn") {
     const done = await burn({ sdk, node, fetchImpl, privateKey, chain, amount, fee: a.fee });
     console.log(`burned ${done.amount} on ${chain} for ${sdk.accountFromPrivateKey(privateKey).address}\nto ${done.to}\ntransaction ${done.tx}\n`
       + `burned total on ${chain}: ${done.burned + done.amount} once it is in a block (was ${done.burned})`);
+  } catch (e) { fail(e.message); }
+  process.exit(0);
+}
+
+if (verb === "sell-coin") {
+  // Every amount checked before the node is asked anything.
+  try {
+    if (positionals.length !== 1 || !a.price) fail("hearth sell-coin <coin> --price <parent coin>: how much market coin to lock, and what a buyer pays for all of it");
+    const amount = parseAmount(positionals[0], "the amount");
+    const price = parseAmount(a.price, "--price");
+    const float = parseAmount(a.float, "--float");
+    if (a.fee !== undefined) parseAmount(a.fee, "--fee");
+    const { parent } = exchangeOf(a.market);
+    const { key, node, fetchImpl } = await located();
+    const privateKey = readKey(key);
+    await nodeVersion(node, fetchImpl);
+    await waitSynced(node, a.market, { fetchImpl, label: "market" });
+    const done = await sellCoin({ sdk, node, fetchImpl, privateKey, market: a.market, amount, price, float, fee: a.fee });
+    const d = done.deposit;
+    console.log(`locked ${d.amountDeposited} market coin on ${a.market} for sale at ${d.amountDemanded} ${parent} coin: deposit ${d.demander}/${d.amountDemanded}/${d.nonce}\ntransaction ${done.tx}\n`
+      + `A buyer pays ${d.amountDemanded} ${parent} coin (and that chain's fee) on ${parent}; Lattice credits it straight to ${d.demander} there, with nothing to claim, and the buyer takes the coin. `
+      + "Buyers find it on Hearth's Buy coin page, and hearth status lists it once it is in a block.\n"
+      + `A deposit cannot be cancelled: Lattice has no cancel or refund. Until someone buys it, the only way back is to buy it yourself like any buyer, paying its price to your own address on ${parent} (a fee on each chain).`);
   } catch (e) { fail(e.message); }
   process.exit(0);
 }
@@ -197,6 +229,17 @@ if (verb === "status") {
     const [seller, sponsor] = await Promise.all([n.account(a.market, self), n.account(a.market, sponsorAddress)]);
     console.log(report({ market: a.market, height: m.height, seller: { address: self, balance: seller.balance }, sponsor: { address: sponsorAddress, balance: sponsor.balance },
       ...own, storage: root ? await sponsorStorage(a["sponsor-port"] ?? "8650") : REMOTE_STORAGE }).join("\n"));
+    // The exchange: the seller's coin on sale, and the price it competes with.
+    const { parent, directory } = exchangeOf(a.market);
+    const deposits = await n.deposits(a.market);
+    const paidBy = new Map();
+    for (const d of deposits.filter((x) => x.demander === self)) {
+      const buyer = await n.receipt(parent, directory, d).catch(() => undefined);
+      if (buyer) paidBy.set(d.key, buyer);
+    }
+    console.log(coinLines({ market: a.market, self, deposits, paidBy }).join("\n"));
+    const paid = await n.account(parent, self).catch(() => undefined);
+    if (paid) console.log(`the seller's key holds ${paid.balance} on ${parent}, where buyers of its coin pay it`);
     const pid = root && runningSeller(sellerFiles({ root, key }).pid);
     if (root) console.log(pid ? `the seller runs (pid ${pid})${existsSync(sellerFiles({ root, key }).closing) ? ", closing" : ""}` : "no seller runs beside this node");
   } catch (e) { fail(e.message); }

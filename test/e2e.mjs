@@ -4,7 +4,7 @@
 //
 //   LATTICE=<lattice-node>/.build/debug/lattice node test/e2e.mjs
 //
-// The buyer buys market coin with parent coin (deposit, receipt,
+// The buyer buys market coin with parent coin from `hearth sell-coin` (deposit, receipt,
 // withdrawal), orders a chain, and the host launches it; an order outside
 // the offer's limits is void and never hosted; a lapsed chain is dropped.
 import assert from "node:assert/strict";
@@ -92,18 +92,34 @@ try {
   await until("the host's market coin for fees", async () => (await balance(MARKET, host.address)) >= 10n);
   say("chains up; seller", await balance(MARKET, seller.address), "buyer parent coin", await balance("Nexus/testnet", buyer.address));
 
-  // ---- buying market coin: the main path ----
-  const deposit = { demander: seller.address, amountDemanded: 2000n, nonce: 1n, amountDeposited: 4000n };
-  await send(seller, async () => depositBody({ seller: seller.address, nonce: await nonce(MARKET, seller), chainPath: MARKET.split("/"), depositNonce: deposit.nonce, amountDemanded: deposit.amountDemanded, amountDeposited: deposit.amountDeposited, fee }), "deposit");
-  await until("the deposit listed", async () => (await r.deposits(MARKET)).some((d) => d.demander === seller.address && d.nonce === 1n));
+  // ---- buying market coin: the seller locks it with `hearth sell-coin` ----
+  const sellerKey = join(root, "seller-key.json");
+  writeFileSync(sellerKey, keyFileJSON(sdk, seller.privateKey), { mode: 0o600 });
+  const sellCoin = (amount, price) => execFileSync(process.execPath, [join(ROOT, "bin/hearth.mjs"), "sell-coin", String(amount), "--price", String(price), "--float", "10",
+    "--market", MARKET, "--root", root, "--key", sellerKey, "--lattice", LATTICE], { encoding: "utf8" });
+  const mine = async (amount) => (await r.deposits(MARKET)).find((d) => d.demander === seller.address && d.amountDeposited === amount);
+  say(sellCoin(4000, 2000).trim());
+  const deposit = await until("the deposit listed", () => mine(4000n));
+  assert.equal(deposit.amountDemanded, 2000n);
   const sellerParentBefore = await balance("Nexus/testnet", seller.address);
   await send(buyer, async () => receiptBody({ buyer: buyer.address, nonce: await nonce("Nexus/testnet", buyer), parentPath: ["Nexus", "testnet"], directory: "hosts", deposit, fee }), "receipt");
   await until("the receipt on the parent", async () => (await r.receipt("Nexus/testnet", "hosts", deposit)) === buyer.address);
-  assert.equal(await balance("Nexus/testnet", seller.address), sellerParentBefore + 2000n, "the seller is paid on the parent");
+  assert.equal(await balance("Nexus/testnet", seller.address), sellerParentBefore + 2000n, "the seller is paid on the parent, with nothing to claim");
   await send(buyer, async () => withdrawalBody({ buyer: buyer.address, nonce: await nonce(MARKET, buyer), chainPath: MARKET.split("/"), deposit, fee }), "withdrawal");
   await until("the buyer's market coin", async () => (await balance(MARKET, buyer.address)) === 3999n);
   assert.equal(await r.deposit(MARKET, deposit), 0n, "the deposit is spent");
   say("bought 3999 market coin for 2000 parent coin");
+  // No cancel: an unsold deposit comes back only the way any buyer takes it,
+  // the seller paying its price to itself on the parent.
+  const kept = await balance(MARKET, seller.address);
+  sellCoin(100, 50);
+  const own = await until("the second deposit listed", () => mine(100n));
+  await send(seller, async () => receiptBody({ buyer: seller.address, nonce: await nonce("Nexus/testnet", seller), parentPath: ["Nexus", "testnet"], directory: "hosts", deposit: own, fee }), "self-receipt");
+  await until("the self-receipt", async () => (await r.receipt("Nexus/testnet", "hosts", own)) === seller.address);
+  await send(seller, async () => withdrawalBody({ buyer: seller.address, nonce: await nonce(MARKET, seller), chainPath: MARKET.split("/"), deposit: own, fee }), "self-withdrawal");
+  await until("the deposit back", async () => (await r.deposit(MARKET, own)) === 0n);
+  assert.equal(await balance(MARKET, seller.address), kept - 2n, "back, less two market fees");
+  say("the seller took back its own unsold deposit by paying itself");
 
   // ---- the host's offer, written by sell-hosting ----
   const offerFile = join(root, "offer.json");

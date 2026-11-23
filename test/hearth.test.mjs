@@ -419,7 +419,7 @@ test("an unfunded seller starts no lattice-sponsor: the sponsor's key is its own
 });
 
 test("every verb takes --help", async () => {
-  for (const verb of ["sell", "status", "stop", "unpin", "sweep", "earn", "burn"]) {
+  for (const verb of ["sell", "status", "stop", "unpin", "sweep", "earn", "burn", "sell-coin"]) {
     const { code, out } = await hearth([verb, "--help"]);
     assert.equal(code, 0, `${verb}: ${out}`);
     assert.match(out, new RegExp(`^usage: hearth ${verb} `), verb);
