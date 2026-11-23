@@ -251,9 +251,12 @@ const offerPills = (m, k) => {
   ].join(" ");
 };
 
+/** A launch is in flight (it outlives its view): no other Launch may start. */
+let launchInFlight = false;
 async function viewLaunch(view, _, current) {
   const m = await loadMarket();
-  await Promise.all([m.checked, rulesReady.catch(() => {})]);
+  // The fees each step pays: an order and a withdrawal on the market, a receipt on its parent.
+  const [, , marketFee, parentFee] = await Promise.all([m.checked, rulesReady.catch(() => {}), fee(cfg.market), fee(parentPath)]);
   if (!current()) return;
   const draft = store.get("draft", { name: "", preset: "small", premine: "21000", periods: "7", rules: "anyone", modules: {} });
   const rulesChoice = RULES[draft.rules] ? draft.rules : Object.keys(draft.modules ?? {}).length ? "custom" : "anyone";
@@ -311,14 +314,19 @@ async function viewLaunch(view, _, current) {
       wasmPolicies: Object.keys(modules()).map((moduleCID) => ({ moduleCID, abiVersion: 1n, scope: "transaction", entrypoint: "lattice_validate_transaction" })),
     };
   };
-  // Hearth coin for sale: a buyer short of it pays in ${parentCoin}, and Launch buys it first.
+  // Hearth coin for sale: a buyer short of it pays in the parent's coin, and Launch buys it first.
   let forSale = [];
-  r.deposits(cfg.market).then((ds) => { forSale = ds.filter((d) => d.amountDeposited > 1n); if (current()) refresh(); }).catch(() => {});
-  /** The cheapest sale that covers `short` (what a purchase lands is the sale less the 1 coin fee). */
-  const dealFor = (short) => forSale.filter((d) => d.amountDeposited - 1n >= short && d.demander !== me?.address)
+  const readSales = async () => { forSale = (await r.deposits(cfg.market)).filter((d) => d.amountDeposited > marketFee); };
+  readSales().then(() => current() && refresh()).catch(() => {});
+  /** The cheapest sale that covers `short`: a purchase lands the sale less the withdrawal's fee. */
+  const dealFor = (short) => forSale.filter((d) => d.amountDeposited - marketFee >= short && d.demander !== me?.address)
     .sort((a, b) => (a.amountDemanded < b.amountDemanded ? -1 : 1))[0];
   const saved = store.get("offers", null) ?? [store.get("offer", null)].filter(Boolean);
   let chosen = Array.isArray(saved) ? saved : [];
+  // Hosts are picked for the buyer until they pick themselves (unchecking every host stays unchecked).
+  let autoPick = chosen.length === 0;
+  // The last launch's failure, kept across re-renders until the buyer changes something.
+  let lastError = null;
   const counted = soldPerOffer();
 
   const refresh = () => {
@@ -342,8 +350,10 @@ async function viewLaunch(view, _, current) {
       if (!had || (room(...had) <= 0n && room(k, o) > 0n)) byHost.set(h, [k, o]);
     }
     const shown = [...byHost.values()];
+    const before = chosen.length;
     chosen = chosen.filter((k) => shown.some(([f, o]) => f === k && room(k, o) > 0n));
-    if (!chosen.length) {
+    if (before && !chosen.length) autoPick = true;   // what they picked is gone: pick again
+    if (!chosen.length && autoPick) {
       // Two hosts by default, under one parent, each with room: one can stop and the app stays up.
       const open = shown.filter(([k, o]) => room(k, o) > 0n);
       const first = open[0];
@@ -363,6 +373,7 @@ async function viewLaunch(view, _, current) {
             <td class="small">${recordLine(st)}</td></tr>`;
         }).join("")}</tbody></table></div>`;
     for (const box of document.querySelectorAll("input[name=offer]")) box.onchange = () => {
+      autoPick = false; lastError = null;
       chosen = box.checked ? [...chosen, box.value] : chosen.filter((k) => k !== box.value);
       store.set("offers", chosen); refresh();
     };
@@ -378,31 +389,37 @@ async function viewLaunch(view, _, current) {
     $("#cost").innerHTML = offers.length === 0 ? ""
       : offers.length === 1 ? `<b>${fmt(cost)} ${coinName}</b> for ${duration(offers[0][1].period * periods)} of hosting`
       : `<b>${fmt(cost)} ${coinName}</b>: ${offers.map(([k, o]) => `${fmt(o.price * periods)} for ${duration(o.period * periods)} at ${esc(hostName(k.split("/")[0]))}`).join(", ")}`;
-    const have = balances.market?.balance ?? 0n;
-    const need = cost + 1n;
+    const out = { offers, texts: chosen.map((k) => [k, m.offers.get(k)]), path, periods, s: spec(), mods, nameOK };
     const note = $("#launchNote");
     const button = $("#launch");
+    // A launch in flight owns the button and the note until it ends.
+    if (launchInFlight) { button.disabled = true; return out; }
+    const known = !me || (balances.market && balances.parent);   // unknown is not zero: never buy on a failed read
+    const have = balances.market?.balance ?? 0n, need = cost + marketFee;
+    const lacking = offers.length > 0 && known && have < need;
     button.disabled = !offers.length || !nameOK;
     if (RULES[rules()].file && !RULES[rules()].cid) { note.innerHTML = `<div class="notice bad">These rules did not load. <a href="" onclick="location.reload();return false">Reload</a> to try again.</div>`; button.disabled = true; }
-    else if (buying && buying.step !== "done" && !buying.error) { note.innerHTML = ""; button.disabled = true; showPending(); }
-    else if (offers.length && have < need) {
-      // Short of Hearth coin: pay in ${parentCoin} instead, through the cheapest sale that covers it.
-      const deal = dealFor(need - have), pay = deal ? deal.amountDemanded + 1n : 0n, hasParent = balances.parent?.balance ?? 0n;
+    // A coin purchase not finished (in progress, or failed after paying): finish or dismiss it first.
+    else if (buying && buying.step !== "done") { note.innerHTML = `<div class="notice">Finish or dismiss your coin purchase below before launching.</div>`; button.disabled = true; showPending(); }
+    else if (!known) { note.innerHTML = `<p class="small muted">Reading your balance…</p>`; button.disabled = true; }
+    else if (lacking) {
+      // Short of Hearth coin: pay in the parent's coin instead, through the cheapest sale that covers it.
+      const deal = dealFor(need - have), pay = deal ? deal.amountDemanded + parentFee : 0n, hasParent = balances.parent?.balance ?? 0n;
       if (!deal) { note.innerHTML = `<div class="notice">This takes ${fmt(need)} ${coinName}${me ? `; you have ${fmt(have)}` : ""}, and nobody is selling enough right now. <a href="#/coin">See what's for sale</a></div>`; button.disabled = true; }
       else if (hasParent < pay) { note.innerHTML = `<div class="notice">This costs <b>${fmt(pay)} ${esc(parentCoin)}</b>${me ? `; you have ${fmt(hasParent)}` : ""}. ${me ? "" : "Launching makes an account in this browser. "}<a href="#/coin">Get ${esc(parentCoin)}</a></div>`; button.disabled = true; }
       else {
-        const left = have + deal.amountDeposited - 1n - need;
-        note.innerHTML = `<p class="small muted">This costs <b>${fmt(pay)} ${esc(parentCoin)}</b>: Launch buys ${fmt(deal.amountDeposited - 1n)} ${coinName} with it (the cheapest sale that covers this), then pays ${offers.length > 1 ? "the hosts" : "the host"}${left > 0n ? `; the ${fmt(left)} left over stays in your account` : ""}. It takes a few minutes. There are no refunds: <a href="#/hosts">check ${offers.length > 1 ? "each host's" : "the host's"} record</a> first.</p>`;
+        const landed = deal.amountDeposited - marketFee, left = have + landed - need;
+        note.innerHTML = `<p class="small muted">This costs <b>${fmt(pay)} ${esc(parentCoin)}</b>: Launch buys ${fmt(landed)} ${coinName} with it (the cheapest sale that covers this), then pays ${offers.length > 1 ? "the hosts" : "the host"}${left > 0n ? `; the ${fmt(left)} left over stays in your account` : ""}. It takes a few minutes. There are no refunds: <a href="#/hosts">check ${offers.length > 1 ? "each host's" : "the host's"} record</a> first.</p>`;
       }
-      if (!button.disabled) button.textContent = "Buy coin and launch";
     }
     else note.innerHTML = offers.length ? `<p class="small muted">Each host must launch it within about ${duration(SETTLE + 5n)}, and paid time counts from then. If a host fills up or closes before your payment lands, that payment is not refunded: <a href="#/hosts">check a host's record</a> first.</p>` : "";
-    if (button.textContent === "Buy coin and launch" && (button.disabled || have >= need)) button.textContent = "Launch";
-    // The version text of each offer as shown: what the payment must still find in force.
-    return { offers, texts: chosen.map((k) => [k, m.offers.get(k)]), path, periods, s: spec(), mods, nameOK };
+    if (lastError) note.insertAdjacentHTML("afterbegin", `<div class="notice bad">${esc(lastError)}</div>`);
+    button.textContent = lacking && !button.disabled ? "Buy coin and launch" : "Launch";
+    return out;
   };
-  for (const id of ["name", "preset", "premine", "periods"]) $(`#${id}`).oninput = refresh;
-  for (const radio of document.querySelectorAll("input[name=rules]")) radio.onchange = refresh;
+  const edit = () => { lastError = null; refresh(); };
+  for (const id of ["name", "preset", "premine", "periods"]) $(`#${id}`).oninput = edit;
+  for (const radio of document.querySelectorAll("input[name=rules]")) radio.onchange = edit;
   $("#modules").onchange = async (e) => {
     custom = {};
     for (const file of e.target.files) {
@@ -414,27 +431,35 @@ async function viewLaunch(view, _, current) {
   if (me) loadBalances().then(() => current() && refresh());
   refresh();
   // Coin that lands while this page is open (the 20 s balance check) updates what Launch can do.
-  let launching = false;
-  refreshYou = () => { if (current() && !launching) refresh(); };
+  refreshYou = () => { if (current()) refresh(); };
 
   $("#launch").onclick = async () => {
+    if (launchInFlight || (buying && buying.step !== "done")) return;
     const { offers, texts, path, periods, s, mods, nameOK } = refresh();
     if (!offers.length || !nameOK) return;
     if (!me) makeAccount();
     const button = $("#launch");
-    button.disabled = true; launching = true;
+    button.disabled = true; launchInFlight = true; lastError = null;
     try {
       // Short of Hearth coin: buy it first (Buy coin's own purchase, shown here). Whatever happens
       // after, the coin bought stays in this browser's account.
-      const short = offers.reduce((sum, [, o]) => sum + o.price * periods, 0n) + 1n - (balances.market?.balance ?? 0n);
-      if (short > 0n) {
-        const deal = dealFor(short);
-        if (!deal) throw new Error(`Nobody is selling ${fmt(short)} ${coinName} right now.`);
+      await loadBalances();
+      if (!balances.market || !balances.parent) throw new Error(`Could not read your balance from ${cfg.node}. Try again.`);
+      const cost = offers.reduce((sum, [, o]) => sum + o.price * periods, 0n), need = cost + marketFee;
+      const missing = need - balances.market.balance;
+      if (missing > 0n) {
+        await readSales();
+        const deal = dealFor(missing);
+        if (!deal) throw new Error(`Nobody is selling ${fmt(missing)} ${coinName} right now.`);
         button.textContent = "Buying coin…";
         await buy(deal);
         if (buying?.step !== "done") throw new Error(buying?.error ?? "Buying coin did not finish.");
-        buying = null; store.set("buying", null); $("#pending").innerHTML = "";
+        buying = null; store.set("buying", null);
+        // Left this page while buying: the coin stays in the account, and nothing is paid.
+        if (!current()) { launchInFlight = false; return; }
+        $("#pending").innerHTML = "";
         await loadBalances();
+        if ((balances.market?.balance ?? 0n) < need) throw new Error(`You hold ${fmt(balances.market?.balance ?? 0n)} ${coinName} after buying, and this takes ${fmt(need)}. Launch again to buy the rest.`);
       }
       // Then the offers and the name, as the market stands now.
       button.textContent = "Checking the name…";
@@ -464,10 +489,12 @@ async function viewLaunch(view, _, current) {
       const mine = store.get("orders", []);
       store.set("orders", [...mine.filter((k) => !keys.includes(k)), ...keys]);
       store.set("draft", { ...store.get("draft", {}), name: "" });
+      launchInFlight = false;
       location.hash = `#/order/${encodeURIComponent(keys[0])}`;
     } catch (e) {
-      $("#launchNote").innerHTML = `<div class="notice bad">${esc(e.message)}</div>`;
-      button.disabled = false; button.textContent = "Launch"; launching = false;
+      launchInFlight = false;
+      if (!current()) return;
+      lastError = e.message; refresh();
     }
   };
 }
@@ -782,6 +809,7 @@ async function runPurchase() {
       p.step = "done";
       await loadBalances();
       status(`Bought ${fmt(d.amountDeposited - 1n)} ${coinName}.`);
+      refreshYou?.();
       if (location.hash.startsWith("#/coin")) route();
     }
   } catch (e) {
