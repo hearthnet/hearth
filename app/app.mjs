@@ -29,7 +29,7 @@ const DOCS = "https://hearthnet.github.io/";
 // ---- configuration: ?node=&market=&sponsor= override the mainnet defaults ----
 const params = new URLSearchParams(location.search);
 const cfg = {
-  node: params.get("node") ?? "https://rpc.lattice.build",
+  node: params.get("node") ?? "https://rpc.hearthnet.io",
   market: params.get("market") ?? "Nexus/hearth",
   // A fee sponsor that pays out the parent's coin for work (testnet's does); none by default.
   sponsor: params.get("sponsor") ?? "",
