@@ -590,6 +590,7 @@ async function viewCoin(view, _, current) {
     </details>
   </section>`;
   const you = () => {
+    if (!$("#you")) return;   // a balance read landing after the page changed
     $("#you").innerHTML = me
       ? `<div class="grid"><div class="card soft"><p class="muted small">${coinName}</p><p class="stat">${balances.market ? fmt(balances.market.balance) : "…"}</p></div>
          <div class="card soft"><p class="muted small">${esc(parentCoin)} to pay with</p><p class="stat">${balances.parent ? fmt(balances.parent.balance) : "…"}</p></div>
