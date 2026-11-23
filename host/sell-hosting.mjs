@@ -5,7 +5,7 @@
 // listener, with an admin token; see README.md).
 //
 //   node host/sell-hosting.mjs (--root /var/lib/lattice | --node http://10.0.0.5:8090 --token-file token) \
-//     --market Nexus/testnet/hosts --key host.json --offer offer.json [--url https://host.example] \
+//     --market Nexus/hearth --key host.json --offer offer.json [--url https://host.example] \
 //     [--proof https://host.example:8650/.well-known/lattice.json] [--storage-offer storage.json] \
 //     [--sponsor-bin lattice-sponsor] [--sponsor-port 8650] [--sponsor-url https://host.example/sponsor] \
 //     [--storage-rate 10240] [--lattice /usr/local/bin/lattice] [--interval 30] [--resume]

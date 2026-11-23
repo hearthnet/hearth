@@ -26,18 +26,42 @@ const SDK_TAG = "v1.0.0";
 const SDK_URL = `https://cdn.jsdelivr.net/gh/hearthnet/hearth@${SDK_TAG}/vendor/lattice-browser.js`;
 const DOCS = "https://hearthnet.github.io/";
 
-// ---- configuration: ?node=&market=&sponsor= override the testnet defaults ----
+// ---- configuration: ?node=&entry=&market=&sponsor= override the mainnet defaults ----
 const params = new URLSearchParams(location.search);
+const MAINNET_MARKET = { path: "Nexus/hearth", genesis: "bafyreiallx3geissybbne6zlbvpovmnl7uqtsvfkwvgr3o4ii66w3xommq" };
 const cfg = {
-  node: params.get("node") ?? "https://lattice-testnet-apps-iad.fly.dev",
-  market: params.get("market") ?? "Nexus/testnet/lodger-3129cc",
-  sponsor: params.get("sponsor") ?? "https://lattice-testnet-apps-iad.fly.dev:8650/sponsor",
+  // Any node hosting Nexus: it lists the market's nodes (findNode).
+  entry: params.get("entry") ?? "https://rpc.lattice.build",
+  node: params.get("node"),
+  market: params.get("market") ?? "Nexus/hearth",
+  // A fee sponsor that pays out the parent's coin for work; none by default.
+  sponsor: params.get("sponsor") ?? "",
   blockSeconds: Number(params.get("blockSeconds") ?? 60),
 };
 const marketPath = cfg.market.split("/");
 const parentPath = marketPath.slice(0, -1).join("/");
 const directory = marketPath.at(-1);
 const coinName = "Hearth coin", parentCoin = `${marketPath.at(-2)} coin`;
+/**
+ * A node serving the market, found through Lattice: the SDK's resolver asks
+ * the entry for the read URLs the market's hosts declare, and keeps those on
+ * the entry's network that serve the market (all probed at once, each with
+ * a timeout). Of those that take transactions (the app reads from and sends
+ * to one node), the fastest whose market has the market's genesis is used;
+ * none, the entry.
+ */
+async function findNode() {
+  const market = cfg.market.split("/");
+  const genesis = cfg.market === MAINNET_MARKET.path ? MAINNET_MARKET.genesis : params.get("genesis");
+  let hosts = [];
+  try { hosts = await new sdk.EndpointResolver(new sdk.NodeClient(cfg.entry, ["Nexus"])).resolve(market, AbortSignal.timeout(10_000)); } catch {}
+  const fastest = (some) => Promise.any(some.map(async ({ url }) => {
+    if (genesis && (await new sdk.NodeClient(url, market).chainInfo(AbortSignal.timeout(5_000))).genesisHash !== genesis) throw new Error("another chain");
+    return url;
+  }));
+  try { return await fastest(hosts.filter((h) => h.declaresSubmit)); } catch { return cfg.entry; }
+}
+if (!cfg.node) cfg.node = await findNode();
 const r = reader(sdk, cfg.node);
 
 // ---- small helpers ----
@@ -553,8 +577,8 @@ async function viewCoin(view, _, current) {
   <section class="stack">
     <details id="earn"><summary>Need ${esc(parentCoin)}?</summary>
       <div class="stack" style="margin-top:12px">
-        <p class="muted">Anyone holding ${esc(parentCoin)} can send it to your address. On testnet you can also earn it with this device: it does work for the fee sponsor, which pays your address each time your earnings reach its payout. It keeps a few cores busy until you press Stop or close this page. It is worth nothing: it is for testing. <a href="${DOCS}">More in the docs</a>.</p>
-        <div class="row"><button class="btn" id="grind">Earn with this device</button><span class="muted small" id="grindStatus"></span></div>
+        <p class="muted">Anyone holding ${esc(parentCoin)} can send it to your address.${cfg.sponsor ? ` You can also earn it with this device: it does work for the fee sponsor, which pays your address each time your earnings reach its payout. It keeps a few cores busy until you press Stop or close this page.` : ""} <a href="${DOCS}">More in the docs</a>.</p>
+        ${cfg.sponsor ? `<div class="row"><button class="btn" id="grind">Earn with this device</button><span class="muted small" id="grindStatus"></span></div>` : ""}
       </div>
     </details>
     <details><summary>Sell ${coinName}</summary>
@@ -595,10 +619,10 @@ async function viewCoin(view, _, current) {
   if (me) loadBalances().then(() => { if (current()) { you(); list().catch(() => {}); } });
   showPending();
 
-  // Earning, on testnet, with this device's cores (`startEarning`).
+  // Earning with this device's cores (`startEarning`), where a sponsor pays out.
   refreshYou = () => { if (current()) { you(); list().catch(() => {}); } };
   showEarning();
-  $("#grind").onclick = () => {
+  if ($("#grind")) $("#grind").onclick = () => {
     if (earning) { earning.stop(); return; }
     if (!me) { makeAccount(); you(); }
     startEarning();
@@ -621,7 +645,7 @@ async function viewCoin(view, _, current) {
   };
 }
 
-// ---- Earning testnet coin with this device ----
+// ---- Earning the parent's coin with this device, through a sponsor ----
 //
 // The fee sponsor pays an address once the work done for it reaches its
 // payout. The page asks for work and hands back shares itself, one request at
@@ -1138,7 +1162,7 @@ async function viewWallet(view) {
 }
 
 // ---- start ----
-$("#foot").innerHTML = `Market chain <span class="mono">${esc(cfg.market)}</span> read from <span class="mono">${esc(cfg.node)}</span>, every record checked against its CID. Testnet coin is worth nothing: it is for testing. <a href="${DOCS}">Docs</a> · <a href="https://github.com/hearthnet/hearth">Source</a>`;
+$("#foot").innerHTML = `Market chain <span class="mono">${esc(cfg.market)}</span> read from <span class="mono">${esc(cfg.node)}</span>, every record checked against its CID. <a href="${DOCS}">Docs</a> · <a href="https://github.com/hearthnet/hearth">Source</a>`;
 renderChip();
 if (me) loadBalances();
 buying = (() => { const b = store.get("buying", null); return b ? revive(b) : null; })();

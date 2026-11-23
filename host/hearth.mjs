@@ -8,8 +8,8 @@ import { reader } from "../client/market.mjs";
 import { burnAddress, formatHostURL, formatStorageOffer, isHTTPS, isPath, offerText, parentOf, parseHostURL, parseOffer, parseStorageOffer, pathFromNexus } from "../client/records.mjs";
 import { submit } from "../client/tx.mjs";
 
-export const DEFAULT_MARKET = "Nexus/testnet/lodger-3129cc";
-export const DEFAULT_PARENT = "Nexus/testnet";
+export const DEFAULT_MARKET = "Nexus/hearth";
+export const DEFAULT_PARENT = "Nexus";
 /**
  * What `--price` alone sells: small chains. A buyer's chain may fill every
  * block, and the host keeps every block and the state they add, paid for by
@@ -35,9 +35,8 @@ export const WHY_SELL = "You earn Hearth coin (the market's coin): buyers' order
 export const DEFAULT_DURATION_MS = 30 * 86400 * 1000;
 /**
  * What the seller's sponsor charges for storage unless `--storage-rate`
- * says: bytes per market coin. Pins are kept until taken down, so it is the rate the
- * testnet's own storage sponsor charges on the market (10 KiB a coin: a
- * megabyte costs about a tenth of a market block's reward).
+ * says: bytes per market coin. Pins are kept until taken down: at 10 KiB a
+ * coin, a megabyte costs about a tenth of a market block's reward.
  */
 export const DEFAULT_STORAGE_RATE = 10240;
 /**
@@ -96,7 +95,7 @@ export function currentOffer({ offers, self, id, file }) {
 export function fundingMessage({ address, need, interval }) {
   if (BigInt(need.balance) >= BigInt(need.amount)) return undefined;
   return `Send at least ${need.amount} coin on ${need.chain} to ${address}, `
-    + `from any account that holds some, or earn it with this machine: hearth earn; this seller waits and checks again every ${interval} s.`;
+    + `from any account that holds some, or earn it with this machine: hearth earn --sponsor <url>; this seller waits and checks again every ${interval} s.`;
 }
 
 /**
@@ -113,7 +112,7 @@ export function fundingMessage({ address, need, interval }) {
 export function fundingStep({ fee, seller, sponsor, canMove, otherSponsor, chain, address, interval }) {
   if (seller >= 3n * fee) return { ready: true };
   const move = 4n * fee - seller;
-  const send = `send ${3n * fee - seller} coin on ${chain} to ${address}, or earn it with this machine: hearth earn`;
+  const send = `send ${3n * fee - seller} coin on ${chain} to ${address}, or earn it with this machine: hearth earn --sponsor <url>`;
   if (canMove && otherSponsor !== undefined) {
     return { wait: `a lattice-sponsor already answers on port ${otherSponsor} and may sign with the sponsor's key, so the seller moves nothing from it: `
       + `stop that sponsor, or ${send}. Checking again every ${interval} s.` };
@@ -192,7 +191,7 @@ export function checkSellFlags(a) {
     for (const k of ["capacity", "maxBlockSize", "maxStateGrowth", "minTargetBlockTime"]) if (!(Number(o[k]) > 0)) throw new Error(`the offer file ${a.offer} has no ${k}`);
   }
   if (a.parent !== undefined && !(isPath(a.parent) && (a.parent === "Nexus" || a.parent.startsWith("Nexus/")))) {
-    throw new Error(`--parent is a chain path from Nexus, e.g. Nexus/testnet, not ${a.parent}`);
+    throw new Error(`--parent is a chain path from Nexus, e.g. Nexus, not ${a.parent}`);
   }
   const offerId = a.price ? offerFromFlags({ price: a.price, parent: a.parent, chains: a.chains, id: a.id }).id : undefined;
   if (a["burn-chain"] && !a.burn) throw new Error("--burn-chain goes with --burn");
@@ -330,7 +329,9 @@ export async function burn({ sdk, node, fetchImpl, privateKey, chain, amount, at
 export function rpcPort(root, lattice = "lattice", fetchImpl = (...a) => fetch(...a)) {
   return new Promise((ok, fail) => execFile(lattice, ["config", "get", "rpc", "--root", root], { timeout: 120_000 }, (error, stdout, stderr) => {
     if (!error) { try { return ok(Number(JSON.parse(stdout))); } catch (e) { return fail(new Error(`${lattice} config get rpc: ${e.message}`)); } }
-    const why = new Error(error.code === "ENOENT" ? `${lattice} is not on PATH: give --lattice <path>` : `${lattice} config get rpc: ${error.message}\n${stderr}`);
+    const why = new Error(error.code === "ENOENT" ? `${lattice} is not on PATH: give --lattice <path>`
+      : /Unknown option '--root'|Unexpected argument 'config'|Unknown subcommand/.test(stderr) ? `${lattice} is older than Lattice ${MIN_NODE} (it has no \`lattice config get\`): give --lattice <path> to the lattice beside your node`
+      : `${lattice} config get rpc: ${error.message}\n${stderr}`);
     let port;
     try { port = JSON.parse(readFileSync(join(root, "lattice.json"), "utf8")).rpc ?? 8080; } catch { return fail(why); }
     nodeVersion(`http://127.0.0.1:${port}`, fetchImpl).then(() => fail(why), fail);
@@ -352,7 +353,9 @@ export async function nodeVersion(url, fetchImpl = (...a) => fetch(...a)) {
     return response.json();
   }));
   const chains = config?.status?.chains;
-  if (!Array.isArray(chains) || !chains.length || !chains.every((c) => Array.isArray(c.from))) {
+  // A fresh node lists no chain (Nexus is never listed): its fragments,
+  // which came with `from`, say it is new enough.
+  if (!Array.isArray(config?.fragments) || !Array.isArray(chains) || !chains.every((c) => Array.isArray(c.from))) {
     throw Object.assign(new Error(`Hearth needs Lattice ${MIN_NODE} or newer (you have ${status?.version ?? "an older one"}: its GET /config does not say which layer lists each chain)`), { tooOld: true });
   }
   return status?.version ?? "unknown";

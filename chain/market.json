@@ -1,7 +1,7 @@
 {
-  "note": "The market deployed on the testnet. Its policy module's bytes were built from policy/src before a path remap and are not committed; chain/policy.wasm is this repo's build of policy/src, and chain/spec.json is the spec of a devnet market running it.",
-  "path": "Nexus/testnet/lodger-3129cc",
-  "genesis": "bafyreicbllerm4n3yyknvd7hbwwmwtf27qubbihgp7umj6fzf7cr32zeua",
-  "moduleCID": "bafyreihubealypiq7club3dkvj7744dem7zswqlmvxuflfbj36kgv4z6zy",
+  "note": "The Hearth market on mainnet. Its spec is chain/spec.json and its policy module is chain/policy.wasm, by that module's CID.",
+  "path": "Nexus/hearth",
+  "genesis": "bafyreiallx3geissybbne6zlbvpovmnl7uqtsvfkwvgr3o4ii66w3xommq",
+  "moduleCID": "bafyreiful2rrjn7ncwtgqheom5lor7sbitucc4qv2bh3tvbptsgf4j6xaq",
   "targetBlockTime": 60000
 }
