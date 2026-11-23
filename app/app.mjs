@@ -37,7 +37,7 @@ const cfg = {
 const marketPath = cfg.market.split("/");
 const parentPath = marketPath.slice(0, -1).join("/");
 const directory = marketPath.at(-1);
-const coinName = "coin", parentCoin = `${marketPath.at(-2)} coin`;
+const coinName = "Hearth coin", parentCoin = `${marketPath.at(-2)} coin`;
 const r = reader(sdk, cfg.node);
 
 // ---- small helpers ----
@@ -251,41 +251,51 @@ const offerPills = (m, k) => {
   ].join(" ");
 };
 
+/** A launch is in flight (it outlives its view): no other Launch may start. */
+let launchInFlight = false;
+/** A launch's failure carried into the view re-rendered from the fresh market. */
+let carriedError = null;
 async function viewLaunch(view, _, current) {
   const m = await loadMarket();
-  await Promise.all([m.checked, rulesReady.catch(() => {})]);
+  // The fees each step pays: an order and a withdrawal on the market, a receipt on its parent.
+  const [, , marketFee, parentFee] = await Promise.all([m.checked, rulesReady.catch(() => {}), fee(cfg.market), fee(parentPath)]);
   if (!current()) return;
   const draft = store.get("draft", { name: "", preset: "small", premine: "21000", periods: "7", rules: "anyone", modules: {} });
   const rulesChoice = RULES[draft.rules] ? draft.rules : Object.keys(draft.modules ?? {}).length ? "custom" : "anyone";
   view.innerHTML = `
   <section>
-    <h1>Launch a chain without running a node</h1>
-    <p class="lead">Your app's data lives on its own chain. Pick hosts, pay them in ${coinName} for the days you want, and they run it: they build it from your spec, store it, serve it at a public URL and make its blocks. Anyone can check here that they do. <a href="${DOCS}">How it works</a></p>
+    <h1>Launch an app</h1>
+    <p class="lead">Name your app, choose who can write, and pay hosts for the days you want. They keep its data online; then paste the code into your page. <a href="${DOCS}">How it works</a></p>
   </section>
   <section class="stack">
-    <h2>1. Your chain</h2>
+    <h2>1. Your app</h2>
     <div class="fields">
-      <div><label for="name">Name</label><input id="name" type="text" autocomplete="off" spellcheck="false" placeholder="my-app" value="${esc(draft.name)}"><p class="hint" id="pathHint"></p></div>
-      <div><label for="preset">Size</label><select id="preset">${Object.entries(PRESETS).map(([k, p]) => `<option value="${k}" ${draft.preset === k ? "selected" : ""}>${p.label}: ${Number(p.targetBlockTime) / 1000} s blocks, ${fmt(p.maxBlockSize / 1000n)} kB</option>`).join("")}</select></div>
-      <div><label for="premine">Coin you start with</label><input id="premine" type="number" min="0" step="1" value="${esc(draft.premine)}"><p class="hint">Paid to your account on the new chain. Writes pay fees from it, unless a sponsor pays them.</p></div>
+      <div><label for="name">App name</label><input id="name" type="text" autocomplete="off" spellcheck="false" placeholder="my-app" value="${esc(draft.name)}"><p class="hint" id="pathHint"></p></div>
     </div>
-    <p class="hint">Each block pays ${fmt(BLOCK_REWARD)} ${coinName} on your chain to the host that makes it, so its sponsor can pay your visitors' write fees for them.</p>
     <fieldset class="stack" style="border:0;padding:0;margin:16px 0 0"><legend style="font-weight:600;font-size:14px;margin-bottom:4px">Who can write</legend>
       ${Object.entries(RULES).map(([k, x]) => `<label class="choice"><input type="radio" name="rules" value="${k}" ${k === rulesChoice ? "checked" : ""}><span><b>${x.label}</b><br><span class="hint">${x.hint}</span></span></label>`).join("")}
       <p id="customRules" ${rulesChoice === "custom" ? "" : "hidden"}><input type="file" id="modules" accept=".wasm" multiple><span class="hint" id="moduleList" style="display:block"></span></p>
-      <p class="hint"><b>Rules are fixed at launch:</b> they can't be changed later. To change them, launch a new chain.</p>
+      <p class="hint"><b>Rules are fixed at launch:</b> they can't be changed later. To change them, launch a new app.</p>
     </fieldset>
+    <details${draft.preset !== "small" || draft.premine !== "21000" ? " open" : ""}><summary>Advanced</summary>
+      <div class="fields" style="margin-top:12px">
+        <div><label for="preset">Size</label><select id="preset">${Object.entries(PRESETS).map(([k, p]) => `<option value="${k}" ${draft.preset === k ? "selected" : ""}>${p.label}: ${Number(p.targetBlockTime) / 1000} s blocks, ${fmt(p.maxBlockSize / 1000n)} kB</option>`).join("")}</select></div>
+        <div><label for="premine">Coin your app starts with</label><input id="premine" type="number" min="0" step="1" value="${esc(draft.premine)}"><p class="hint">Paid to your account on the app's own chain. Writes pay fees from it, unless a host's sponsor pays them.</p></div>
+      </div>
+      <p class="hint">Your app runs as its own chain, <span class="mono" id="pathFull"></span>. Each block pays ${fmt(BLOCK_REWARD)} of its coin to the host that makes it, so the host's sponsor can pay your visitors' write fees.</p>
+    </details>
   </section>
   <section class="stack">
     <h2>2. Hosts</h2>
-    <p class="muted small">You can pick more than one host; each is paid separately.</p>
+    <p class="muted small">Two hosts are picked for you when two are open: if one stops, the other keeps your app online. Each is paid separately. <a href="#/hosts">Compare hosts</a></p>
     <div id="offers"></div>
   </section>
   <section class="stack">
     <h2>3. Pay and launch</h2>
-    <div class="row"><div style="width:140px"><label for="periods">Periods</label><input id="periods" type="number" min="1" step="1" value="${esc(draft.periods)}"></div><p class="muted" id="cost" style="margin-top:22px"></p></div>
+    <div class="row"><div style="width:140px"><label for="periods">How long</label><input id="periods" type="number" min="1" step="1" value="${esc(draft.periods)}"><p class="hint" id="periodHint"></p></div><p class="muted" id="cost" style="margin-top:22px"></p></div>
     <div id="launchNote"></div>
-    <p class="small muted">When paid time ends, a host may stop hosting your chain and drop its data; anyone still hosting it keeps it. Anyone can pay for more time.</p>
+    <div id="pending"></div>
+    <p class="small muted">When paid time ends, a host may stop hosting your app and drop its data. Anyone can pay for more time from the app's page.</p>
     <div class="row"><button class="btn primary" id="launch">Launch</button></div>
   </section>`;
 
@@ -306,8 +316,19 @@ async function viewLaunch(view, _, current) {
       wasmPolicies: Object.keys(modules()).map((moduleCID) => ({ moduleCID, abiVersion: 1n, scope: "transaction", entrypoint: "lattice_validate_transaction" })),
     };
   };
+  // Hearth coin for sale: a buyer short of it pays in the parent's coin, and Launch buys it first.
+  let forSale = [];
+  const readSales = async () => { forSale = (await r.deposits(cfg.market)).filter((d) => d.amountDeposited > marketFee); };
+  readSales().then(() => current() && refresh()).catch(() => {});
+  /** The cheapest sale that covers `short`: a purchase lands the sale less the withdrawal's fee. */
+  const dealFor = (short) => forSale.filter((d) => d.amountDeposited - marketFee >= short && d.demander !== me?.address)
+    .sort((a, b) => (a.amountDemanded < b.amountDemanded ? -1 : 1))[0];
   const saved = store.get("offers", null) ?? [store.get("offer", null)].filter(Boolean);
   let chosen = Array.isArray(saved) ? saved : [];
+  // Hosts are picked for the buyer until they pick themselves (unchecking every host stays unchecked).
+  let autoPick = chosen.length === 0;
+  // The last launch's failure, kept across re-renders until the buyer changes something.
+  let lastError = carriedError; carriedError = null;
   const counted = soldPerOffer();
 
   const refresh = () => {
@@ -331,8 +352,15 @@ async function viewLaunch(view, _, current) {
       if (!had || (room(...had) <= 0n && room(k, o) > 0n)) byHost.set(h, [k, o]);
     }
     const shown = [...byHost.values()];
+    const before = chosen.length;
     chosen = chosen.filter((k) => shown.some(([f, o]) => f === k && room(k, o) > 0n));
-    if (!chosen.length) { const first = shown.find(([k, o]) => room(k, o) > 0n); if (first) chosen = [first[0]]; }
+    if (before && !chosen.length) autoPick = true;   // what they picked is gone: pick again
+    if (!chosen.length && autoPick) {
+      // Two hosts by default, under one parent, each with room: one can stop and the app stays up.
+      const open = shown.filter(([k, o]) => room(k, o) > 0n);
+      const first = open[0];
+      if (first) chosen = [first[0], ...open.filter(([k, o]) => k !== first[0] && o.parent === first[1].parent).slice(0, 1).map(([k]) => k)];
+    }
     const parent = m.terms.get(chosen[0])?.parent;
     const hostStats = statsByHost();
     $("#offers").innerHTML = shown.length === 0
@@ -341,12 +369,13 @@ async function viewLaunch(view, _, current) {
           const [host] = k.split("/"); const left = room(k, o); const st = hostStats.get(host);
           const full = left <= 0n, elsewhere = parent && o.parent !== parent;
           return `<tr><td><input type="checkbox" name="offer" value="${esc(k)}" ${chosen.includes(k) ? "checked" : ""} ${full || elsewhere ? "disabled" : ""} aria-label="Choose ${esc(short(host))}"></td>
-            <td><div>${esc(hostName(host))}${m.vouched.get(host)?.keyOnly ? ` ${keyOnlyPill}` : ""}</div><div class="small muted mono">${esc(short(host))}</div><div>${offerPills(m, k)}</div></td>
+            <td><div>${esc(hostName(host))}${m.vouched.get(host)?.keyOnly ? ` ${keyOnlyPill}` : ""}</div></td>
             <td class="num"><b>${fmt(o.price)}</b> <span class="muted small">per ${duration(o.period)}</span></td>
             <td>${full ? `<span class="pill bad">Full</span>` : `<span class="small">${fmt(left)} of ${fmt(o.capacity)}</span>`}</td>
             <td class="small">${recordLine(st)}</td></tr>`;
         }).join("")}</tbody></table></div>`;
     for (const box of document.querySelectorAll("input[name=offer]")) box.onchange = () => {
+      autoPick = false; lastError = null;
       chosen = box.checked ? [...chosen, box.value] : chosen.filter((k) => k !== box.value);
       store.set("offers", chosen); refresh();
     };
@@ -354,26 +383,45 @@ async function viewLaunch(view, _, current) {
     const periods = BigInt(Math.max(1, Math.floor(Number($("#periods").value) || 1)));
     const path = parent ? `${parent}/${name}` : name;
     const nameOK = /^[a-z0-9][a-z0-9-]{0,39}$/.test(name);
-    $("#pathHint").innerHTML = name ? (nameOK ? `Its path: <span class="mono">${esc(path)}</span>` : `<span style="color:var(--bad)">Lowercase letters, digits and dashes, up to 40.</span>`) : "Lowercase letters, digits and dashes.";
+    $("#pathHint").innerHTML = name && !nameOK ? `<span style="color:var(--bad)">Lowercase letters, digits and dashes, up to 40.</span>` : "Lowercase letters, digits and dashes.";
+    $("#pathFull").textContent = path || "…";
+    const lengths = [...new Set(offers.map(([, o]) => o.period))];
+    $("#periodHint").textContent = lengths.length === 1 ? `× ${duration(lengths[0])} = ${duration(lengths[0] * periods)}` : "";
     const cost = offers.reduce((sum, [, o]) => sum + o.price * periods, 0n);
     $("#cost").innerHTML = offers.length === 0 ? ""
       : offers.length === 1 ? `<b>${fmt(cost)} ${coinName}</b> for ${duration(offers[0][1].period * periods)} of hosting`
       : `<b>${fmt(cost)} ${coinName}</b>: ${offers.map(([k, o]) => `${fmt(o.price * periods)} for ${duration(o.period * periods)} at ${esc(hostName(k.split("/")[0]))}`).join(", ")}`;
-    const have = balances.market?.balance ?? 0n;
-    const need = cost + 1n;
+    const out = { offers, texts: chosen.map((k) => [k, m.offers.get(k)]), path, periods, s: spec(), mods, nameOK };
     const note = $("#launchNote");
     const button = $("#launch");
+    // A launch in flight owns the button and the note until it ends.
+    if (launchInFlight) { button.disabled = true; return out; }
+    const known = !me || (balances.market && balances.parent);   // unknown is not zero: never buy on a failed read
+    const have = balances.market?.balance ?? 0n, need = cost + marketFee;
+    const lacking = offers.length > 0 && known && have < need;
     button.disabled = !offers.length || !nameOK;
     if (RULES[rules()].file && !RULES[rules()].cid) { note.innerHTML = `<div class="notice bad">These rules did not load. <a href="" onclick="location.reload();return false">Reload</a> to try again.</div>`; button.disabled = true; }
-    else if (!me) note.innerHTML = `<div class="notice info">Launching makes an account in this browser. You'll need ${fmt(need)} ${coinName}: <a href="#/coin">buy coin</a> first.</div>`;
-    else if (offers.length && have < need) { note.innerHTML = `<div class="notice">You have ${fmt(have)} ${coinName}; this takes ${fmt(need)} with the fee. <a class="btn small primary" href="#/coin?need=${need - have}">Buy ${fmt(need - have)} ${coinName}</a></div>`; button.disabled = true; }
-    else note.innerHTML = offers.length ? `<p class="small muted">Each host must launch it within about ${duration(SETTLE + 5n)}. Paid time counts from then. There are no refunds: <a href="#/hosts">check a host's record</a> first.</p>` : "";
-    if (offers.length && !(RULES[rules()].file && !RULES[rules()].cid)) note.insertAdjacentHTML("beforeend", `<ul class="small muted" style="margin:8px 0 0;padding-left:18px">${offers.map(([k, o]) => `<li>${esc(hostName(k.split("/")[0]))}: ${fmt(room(k, o))} of ${fmt(o.capacity)} places left, open for ${duration(o.until - m.height)}. If it fills or closes before your payment lands, the payment is not refunded.</li>`).join("")}</ul>`);
-    // The version text of each offer as shown: what the payment must still find in force.
-    return { offers, texts: chosen.map((k) => [k, m.offers.get(k)]), path, periods, s: spec(), mods, nameOK };
+    // A coin purchase not finished (in progress, or failed after paying): finish or dismiss it first.
+    else if (buying && buying.step !== "done") { note.innerHTML = `<div class="notice">Finish or dismiss your coin purchase below before launching.</div>`; button.disabled = true; showPending(); }
+    else if (!known) { note.innerHTML = `<p class="small muted">Reading your balance…</p>`; button.disabled = true; }
+    else if (lacking) {
+      // Short of Hearth coin: pay in the parent's coin instead, through the cheapest sale that covers it.
+      const deal = dealFor(need - have), pay = deal ? deal.amountDemanded + parentFee : 0n, hasParent = balances.parent?.balance ?? 0n;
+      if (!deal) { note.innerHTML = `<div class="notice">This takes ${fmt(need)} ${coinName}${me ? `; you have ${fmt(have)}` : ""}, and nobody is selling enough right now. <a href="#/coin">See what's for sale</a></div>`; button.disabled = true; }
+      else if (hasParent < pay) { note.innerHTML = `<div class="notice">This costs <b>${fmt(pay)} ${esc(parentCoin)}</b>${me ? `; you have ${fmt(hasParent)}` : ""}. ${me ? "" : "Launching makes an account in this browser. "}<a href="#/coin">Get ${esc(parentCoin)}</a></div>`; button.disabled = true; }
+      else {
+        const landed = deal.amountDeposited - marketFee, left = have + landed - need;
+        note.innerHTML = `<p class="small muted">This costs <b>${fmt(pay)} ${esc(parentCoin)}</b>: Launch buys ${fmt(landed)} ${coinName} with it (the cheapest sale that covers this), then pays ${offers.length > 1 ? "the hosts" : "the host"}${left > 0n ? `; the ${fmt(left)} left over stays in your account` : ""}. It takes a few minutes. There are no refunds: <a href="#/hosts">check ${offers.length > 1 ? "each host's" : "the host's"} record</a> first.</p>`;
+      }
+    }
+    else note.innerHTML = offers.length ? `<p class="small muted">Each host must launch it within about ${duration(SETTLE + 5n)}, and paid time counts from then. If a host fills up or closes before your payment lands, that payment is not refunded: <a href="#/hosts">check a host's record</a> first.</p>` : "";
+    if (lastError) note.insertAdjacentHTML("afterbegin", `<div class="notice bad">${esc(lastError)}</div>`);
+    button.textContent = lacking && !button.disabled ? "Buy coin and launch" : "Launch";
+    return out;
   };
-  for (const id of ["name", "preset", "premine", "periods"]) $(`#${id}`).oninput = refresh;
-  for (const radio of document.querySelectorAll("input[name=rules]")) radio.onchange = refresh;
+  const edit = () => { lastError = null; refresh(); };
+  for (const id of ["name", "preset", "premine", "periods"]) $(`#${id}`).oninput = edit;
+  for (const radio of document.querySelectorAll("input[name=rules]")) radio.onchange = edit;
   $("#modules").onchange = async (e) => {
     custom = {};
     for (const file of e.target.files) {
@@ -384,14 +432,39 @@ async function viewLaunch(view, _, current) {
   };
   if (me) loadBalances().then(() => current() && refresh());
   refresh();
+  // Coin that lands while this page is open (the 20 s balance check) updates what Launch can do.
+  refreshYou = () => { if (current()) refresh(); };
 
   $("#launch").onclick = async () => {
+    if (launchInFlight || (buying && buying.step !== "done")) return;
     const { offers, texts, path, periods, s, mods, nameOK } = refresh();
     if (!offers.length || !nameOK) return;
     if (!me) makeAccount();
     const button = $("#launch");
-    button.disabled = true; button.textContent = "Checking the name…";
+    button.disabled = true; launchInFlight = true; lastError = null;
     try {
+      // Short of Hearth coin: buy it first (Buy coin's own purchase, shown here). Whatever happens
+      // after, the coin bought stays in this browser's account.
+      await loadBalances();
+      if (!balances.market || !balances.parent) throw new Error(`Could not read your balance from ${cfg.node}. Try again.`);
+      const cost = offers.reduce((sum, [, o]) => sum + o.price * periods, 0n), need = cost + marketFee;
+      const missing = need - balances.market.balance;
+      if (missing > 0n) {
+        await readSales();
+        const deal = dealFor(missing);
+        if (!deal) throw new Error(`Nobody is selling ${fmt(missing)} ${coinName} right now.`);
+        button.textContent = "Buying coin…";
+        await buy(deal);
+        if (buying?.step !== "done") throw new Error(buying?.error ?? "Buying coin did not finish.");
+        buying = null; store.set("buying", null);
+        // Left this page while buying: the coin stays in the account, and nothing is paid.
+        if (!current()) { launchInFlight = false; refreshYou?.(); return; }
+        $("#pending").innerHTML = "";
+        await loadBalances();
+        if ((balances.market?.balance ?? 0n) < need) throw new Error(`You hold ${fmt(balances.market?.balance ?? 0n)} ${coinName} after buying, and this takes ${fmt(need)}. Launch again to buy the rest.`);
+      }
+      // Then the offers and the name, as the market stands now.
+      button.textContent = "Checking the name…";
       const fresh = await loadMarket(true);
       await fresh.checked;
       // The offers again, as the market stands now: still open, still with room.
@@ -400,7 +473,8 @@ async function viewLaunch(view, _, current) {
         const o = fresh.terms.get(k);
         const why = !o ? "is gone" : !isOpen(fresh, o) || o.until <= fresh.height + SETTLE ? "has closed"
           : fresh.offers.get(k) !== text ? "has new terms" : o.capacity <= (now.get(k) ?? 0n) ? "is full" : null;
-        if (why) { refresh(); throw new Error(`The offer at ${hostName(k.split("/")[0])} ${why} since you chose it. Check your hosts and launch again.`); }
+        // Re-render from the fresh market, so the changed offer is not chosen and sent again.
+        if (why) { launchInFlight = false; carriedError = `The offer at ${hostName(k.split("/")[0])} ${why} since you chose it. Check your hosts and launch again.`; route(); return; }
       }
       const hosts = new Set(offers.map(([k]) => k.split("/")[0]));
       const takenHere = fresh.orders.some((x) => hosts.has(x.host) && x.path === path && ["owed", "pending"].includes(verdicts.get(x.key)?.kind) && x.buyer !== me.address);
@@ -418,10 +492,12 @@ async function viewLaunch(view, _, current) {
       const mine = store.get("orders", []);
       store.set("orders", [...mine.filter((k) => !keys.includes(k)), ...keys]);
       store.set("draft", { ...store.get("draft", {}), name: "" });
+      launchInFlight = false;
       location.hash = `#/order/${encodeURIComponent(keys[0])}`;
     } catch (e) {
-      $("#launchNote").innerHTML = `<div class="notice bad">${esc(e.message)}</div>`;
-      button.disabled = false; button.textContent = "Launch";
+      launchInFlight = false;
+      if (!current()) { refreshYou?.(); return; }
+      lastError = e.message; refresh();
     }
   };
 }
@@ -469,7 +545,7 @@ async function viewCoin(view, _, current) {
   view.innerHTML = `
   <section>
     <h1>Buy ${coinName}</h1>
-    <p class="lead">Hosts are paid in ${coinName}, the market chain's own coin. Sellers lock it on the market chain for a price in ${esc(parentCoin)}; you pay that price on ${esc(parentPath)} and take the coin. Lattice checks both sides: nobody holds your payment in between.</p>
+    <p class="lead">Hosts are paid in ${coinName}. You buy it with ${esc(parentCoin)}, and Lattice checks both sides of the trade: nobody holds your payment in between. Launching an app buys what it needs for you.</p>
   </section>
   <section class="stack" id="you"></section>
   <section class="stack"><div class="row"><h2>For sale</h2><span class="spacer"></span><button class="btn small" id="reload">Refresh</button></div><div id="deposits"><p class="muted">Reading the market…</p></div></section>
@@ -735,7 +811,8 @@ async function runPurchase() {
       for (;;) { const left = await r.deposit(cfg.market, d).catch(() => undefined); if (left === 0n) break; await sleep(5000); }
       p.step = "done";
       await loadBalances();
-      status(`Bought ${fmt(d.amountDeposited - 1n)} ${coinName}.`);
+      status(`Bought ${fmt(d.amountDeposited - await fee(cfg.market))} ${coinName}.`);
+      refreshYou?.();
       if (location.hash.startsWith("#/coin")) route();
     }
   } catch (e) {
@@ -752,7 +829,7 @@ function showPending() {
   el.innerHTML = `<h2>Your purchase</h2><div class="card"><p><b>${fmt(d.amountDeposited)} ${coinName}</b> for ${fmt(d.amountDemanded)} ${esc(parentCoin)}</p>
     <ol class="steps">${step(0, `Pay the seller on ${esc(parentPath)}`)}${step(1, "Your payment is in a block")}${step(2, "Take the coin on the market chain")}${step(3, "Your coin lands")}</ol>
     <p class="small ${buying.error ? "" : "muted"}" style="${buying.error ? "color:var(--bad)" : ""}">${esc(buying.error ?? buying.message ?? "")}</p>
-    ${buying.step === "done" || buying.error ? `<div class="row" style="margin-top:10px">${buying.step === "done" ? `<a class="btn primary small" href="#/">Launch a chain</a>` : `<button class="btn small" id="retryBuy">Try again</button>`}<button class="btn small" id="clearBuy">Dismiss</button></div>` : ""}</div>`;
+    ${buying.step === "done" || buying.error ? `<div class="row" style="margin-top:10px">${buying.step === "done" ? `<a class="btn primary small" href="#/">Launch an app</a>` : `<button class="btn small" id="retryBuy">Try again</button>`}<button class="btn small" id="clearBuy">Dismiss</button></div>` : ""}</div>`;
   $("#clearBuy")?.addEventListener("click", () => { buying = null; store.set("buying", null); el.innerHTML = ""; route(); });
   $("#retryBuy")?.addEventListener("click", () => { delete buying.error; runPurchase(); });
 }
@@ -766,7 +843,7 @@ async function viewHosts(view, _, current) {
   const hosts = [...new Set([...m.terms.keys()].map((k) => k.split("/")[0]))];
   view.innerHTML = `
   <section><h1>Hosts</h1>
-    <p class="lead">Every host's sales, from the market chain, and what it serves right now, checked from this browser against each chain's genesis.</p>
+    <p class="lead">What each host sells, what it serves right now (checked from this browser), and its record.</p>
     <p class="small muted">Checking a host asks the sponsor its offer names for its terms, so that sponsor sees this browser's IP address.</p></section>
   <section class="stack">${hosts.length === 0 ? `<div class="empty">No host has made an offer yet.</div>` : hosts.map((h) => {
     const s = stats.get(h);
@@ -790,8 +867,8 @@ async function viewHosts(view, _, current) {
         <td class="small">in ${duration(o.until - m.height)}</td></tr>`).join("")}</tbody></table></div>`}
     </div>`;
   }).join("")}</section>
-  <section class="card soft stack small">
-    <h3>What this shows, and what it can't</h3>
+  <section class="card soft small">
+    <details><summary><b>How hosts are judged, and what this can't show</b></summary><div class="stack" style="margin-top:12px">
     <p>“Serving now” asks each host for the genesis and latest block of every chain it owes, and checks the genesis is the one the buyer paid for. It measures availability now, not storage, and not past uptime: block times are the host's own word.</p>
     <p>A host can raise its count by buying and serving its own chains. “Paid, not served” counts orders a host took after its offer was full, or for a path it had given to another chain; a host can cause both.</p>
     <p>Orders settle ${SETTLE} market blocks after they are written. That is weak against a host holding most of the market chain's mining.</p>
@@ -799,6 +876,7 @@ async function viewHosts(view, _, current) {
     <p>“Burned” is coin sent, by anyone, to an address nobody can spend from, named for the host, on each chain from Nexus down to the market. Each chain's coin is its own, so they are never added up. A burn costs whoever made it; it says nothing about how a host serves.</p>
     <p>“Mines” is the host's claim, not a term of the offer. On your own chains this page reads each block's work and reward recipient from the node (<span class="mono">?node=</span>: point it at your own) and shows the hashrate credited to the host over the last day. If it falls short, don't renew.</p>
     <p>“Verified” means the host's domain lists the offer's address at its <span class="mono">/.well-known/lattice.json</span>. Without it, anyone could post an offer naming a well-known host's URL and keep the coin, so a host whose domain does not list it is not offered. A host that names no domain at all is offered as “Key only”: it claims no name, so judge it by its record.</p>
+    </div></details>
   </section>`;
   // Each host's burns, chain by chain along the market's path, never summed.
   const chains = pathFromNexus(cfg.market);
@@ -905,8 +983,8 @@ async function viewOrders(view, _, current) {
   const local = new Set(store.get("orders", []));
   const mine = m.orders.filter((o) => (me && o.buyer === me.address) || local.has(o.key));
   const waiting = [...local].filter((k) => !m.orders.some((o) => o.key === k));
-  view.innerHTML = `<section><h1>Your chains</h1><p class="lead">Chains you paid a host to run, from this browser's account.</p></section>
-  <section>${mine.length + waiting.length === 0 ? `<div class="empty">None yet. <a href="#/">Launch a chain</a>.</div>` : `<div class="table-scroll"><table><thead><tr><th>Chain</th><th>Host</th><th>Status</th><th>Paid until</th></tr></thead><tbody>
+  view.innerHTML = `<section><h1>Your apps</h1><p class="lead">Apps you paid hosts to keep online, from this browser's account.</p></section>
+  <section>${mine.length + waiting.length === 0 ? `<div class="empty">None yet. <a href="#/">Launch an app</a>.</div>` : `<div class="table-scroll"><table><thead><tr><th>App</th><th>Host</th><th>Status</th><th>Paid until</th></tr></thead><tbody>
     ${waiting.map((k) => `<tr><td><a href="#/order/${encodeURIComponent(k)}" class="mono">${esc(parseOrderKey(k)?.path ?? k)}</a></td><td></td><td><span class="pill info">Paying</span></td><td></td></tr>`).join("")}
     ${mine.map((o) => { const v = verdicts.get(o.key); return `<tr><td><a href="#/order/${encodeURIComponent(o.key)}" class="mono">${esc(o.path)}</a></td><td>${esc(hostName(o.host))}</td><td>${pill(v)}</td><td class="small">${v.kind === "owed" ? (v.active ? `in ${duration(v.until - m.height)}` : "ended") : ""}</td></tr>`; }).join("")}
   </tbody></table></div>`}</section>`;
@@ -965,7 +1043,7 @@ async function viewOrder(view, key, current) {
     ["Settled", settled, settled ? "" : `in ${fmt(v.settlesAt - m.height)} market blocks`],
     ["Launched", launched, v.kind === "owed" && !launched ? (p?.state === "down" ? "The host does not answer right now" : p?.state === "other" ? "The host serves a different chain at this path" : "The host is building its genesis") : ""],
   ];
-  view.innerHTML = `<section class="stack"><p><a href="#/orders">← Your chains</a></p><div class="row"><h1 class="mono" style="font-size:22px">${esc(o.path)}</h1>${pill(v)}</div></section>
+  view.innerHTML = `<section class="stack"><p><a href="#/orders">← Your apps</a></p><div class="row"><h1 class="mono" style="font-size:22px">${esc(o.path)}</h1>${pill(v)}</div></section>
   ${["void", "full", "taken"].includes(v.kind) ? `<div class="notice bad">${esc(v.reason)}. ${v.kind === "void" ? "The host does not owe this chain." : "This counts against the host as paid, not served."}</div>` : ""}
   ${["void", "full", "taken"].includes(v.kind) ? "" : `<section><ol class="steps">${steps.map(([label, done, note], i) => {
       const now = !done && steps.slice(0, i).every((s) => s[1]);
@@ -1065,5 +1143,5 @@ renderChip();
 if (me) loadBalances();
 buying = (() => { const b = store.get("buying", null); return b ? revive(b) : null; })();
 if (buying && buying.step !== "done" && !buying.error && me) runPurchase();
-setInterval(() => { if (me && document.visibilityState === "visible") loadBalances(); }, 20000);
+setInterval(() => { if (me && document.visibilityState === "visible") loadBalances().then(() => refreshYou?.()); }, 20000);
 route();

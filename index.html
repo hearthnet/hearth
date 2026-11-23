@@ -45,11 +45,11 @@ p { margin: 0; }
 .wrap { max-width: 960px; margin: 0 auto; padding: 0 16px; }
 
 header { border-bottom: 1px solid var(--line); }
-header .wrap { display: flex; align-items: center; gap: 20px; min-height: 60px; flex-wrap: wrap; }
+header .wrap { display: flex; align-items: center; gap: 12px; min-height: 60px; flex-wrap: wrap; }
 .brand { display: flex; align-items: center; color: var(--accent-ink); text-decoration: none; }
 .brand svg { display: block; height: 28px; width: auto; }
 nav { display: flex; gap: 4px; flex-wrap: wrap; flex: 1; }
-nav a { padding: 6px 10px; border-radius: 8px; color: var(--muted); text-decoration: none; font-weight: 550; }
+nav a { padding: 6px 8px; white-space: nowrap; border-radius: 8px; color: var(--muted); text-decoration: none; font-weight: 550; }
 nav a[aria-current="page"] { color: var(--ink); background: var(--soft); }
 .wallet-chip { display: flex; gap: 12px; align-items: center; font-size: 14px; color: var(--muted); text-decoration: none; }
 .wallet-chip b { color: var(--ink); font-variant-numeric: tabular-nums; }
@@ -112,11 +112,11 @@ footer { border-top: 1px solid var(--line); padding: 20px 0 40px; color: var(--m
 <header><div class="wrap">
   <a class="brand" href="#/" aria-label="Hearth"><svg viewBox="0 0 988 256" aria-hidden="true"><path fill="currentColor" d="M36 28 H80 V228 H36 Z M176 28 H220 V228 H176 Z M80 84 H176 V112 H80 Z"/><path fill="#E8590C" d="M104 180 C104 164 108 152 112 140 C116 148 118 154 120 158 C120 138 124 122 128 104 C132 122 136 138 136 158 C138 154 140 148 144 140 C148 152 152 164 152 180 A24 24 0 0 1 104 180 Z" transform="translate(128,228) scale(1.0) translate(-128,-204)"/><g transform="translate(312,28)"><path fill="currentColor" fill-rule="evenodd" d="M0 24 H28 V200 H0 Z"/><path fill="currentColor" fill-rule="evenodd" d="M0 130 A50 50 0 0 1 100 130 V200 H72 V130 A22 22 0 0 0 28 130 Z"/><path fill="currentColor" fill-rule="evenodd" d="M240.79 152 A60 60 0 1 0 227.96 178.57 L206.51 160.57 A32 32 0 0 1 152.34 152 Z M152.34 128 A32 32 0 0 1 211.66 128 Z"/><path fill="currentColor" fill-rule="evenodd" d="M264 140 A60 60 0 1 0 384 140 A60 60 0 1 0 264 140 Z M292 140 A32 32 0 1 0 356 140 A32 32 0 1 0 292 140 Z"/><path fill="currentColor" fill-rule="evenodd" d="M356 80 H384 V200 H356 Z"/><path fill="currentColor" fill-rule="evenodd" d="M406 80 H434 V200 H406 Z"/><path fill="currentColor" fill-rule="evenodd" d="M406 130 A50 50 0 0 1 456 80 H478 V108 H456 A22 22 0 0 0 434 130 Z"/><path fill="currentColor" fill-rule="evenodd" d="M510 40 H538 V200 H510 Z"/><path fill="currentColor" fill-rule="evenodd" d="M490 80 H562 V108 H490 Z"/><path fill="currentColor" fill-rule="evenodd" d="M576 24 H604 V200 H576 Z"/><path fill="currentColor" fill-rule="evenodd" d="M576 130 A50 50 0 0 1 676 130 V200 H648 V130 A22 22 0 0 0 604 130 Z"/></g></svg></a>
   <nav aria-label="Main">
-    <a href="#/" data-route="launch">Launch a chain</a>
+    <a href="#/" data-route="launch">Launch an app</a>
     <a href="#/coin" data-route="coin">Buy coin</a>
     <a href="#/hosts" data-route="hosts">Hosts</a>
     <a href="#/storage" data-route="storage">Storage</a>
-    <a href="#/orders" data-route="orders">Your chains</a>
+    <a href="#/orders" data-route="orders">Your apps</a>
     <a href="https://hearthnet.github.io/">Docs</a>
   </nav>
   <a class="wallet-chip" href="#/wallet" id="chip" title="Your account in this browser"></a>
