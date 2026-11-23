@@ -242,7 +242,7 @@ test("the node gates: GET /config says which layer lists each chain (Lattice 4.0
   assert.equal(await nodeVersion("http://127.0.0.1:1", fake({ fragments: ["lattice", "operator"], status: { chains: [{ path: "Nexus/m", actual: "hosted", from: ["operator"] }] } })), "4.0.0+dev", "a node hosting a child");
   assert.equal(await nodeVersion("http://127.0.0.1:1", fake({ fragments: ["lattice"], status: { chains: [] } })), "4.0.0+dev", "a fresh node hosts no child, and lists no chain");
   for (const old of [undefined, { status: {} }, { status: { chains: [] } }, { fragments: ["lattice"], status: { chains: [{ path: "Nexus/m", actual: "hosted" }] } }]) {
-    await assert.rejects(nodeVersion("http://127.0.0.1:1", fake(old)), (e) => e.tooOld && /needs Lattice 5\.0\.0 or newer \(you have 4\.0\.0\+dev/.test(e.message), JSON.stringify(old));
+    await assert.rejects(nodeVersion("http://127.0.0.1:1", fake(old)), (e) => e.tooOld && /needs node 5\.0\.0 or newer \(you have 4\.0\.0\+dev/.test(e.message), JSON.stringify(old));
   }
   assert.deepEqual(syncProgress({ height: "5", bestHeaderHeight: "10" }), { synced: false, height: 5n, best: 10n, line: "syncing market: 5 / 10" });
   assert.equal(syncProgress({ height: "10", bestHeaderHeight: "10" }).synced, true);

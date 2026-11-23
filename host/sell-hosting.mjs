@@ -141,7 +141,7 @@ const { address: sponsorAddress, created: sponsorMade } = ensureKey(sdk, sponsor
 if (sponsorAddress === self) throw new Error(`${sponsorKey} is the seller's key: the sponsor's key must own nothing a draft could reach; move it away`);
 const sponsorDir = join(dirname(resolve(args.key)), "sponsor");
 log(`${sponsorMade ? "made the sponsor's key" : "sponsor key"} ${sponsorKey}: blocks pay ${sponsorAddress}`);
-if (!root) log("with --node this seller runs no sponsor (lattice-sponsor reaches a node only on its loopback): run one beside the node yourself");
+if (!root) log("with --node this seller runs no sponsor (a sponsor reaches a node only on its loopback): run one beside the node yourself");
 
 // ---- the node: its operator API, and nothing else of it ----
 
@@ -348,7 +348,7 @@ async function fund(first) {
   const sponsorPrivate = sdk.hexToBytes(JSON.parse(readFileSync(sponsorKey, "utf8")).privateKey);
   try {
     const tx = await submit(sdk, rpcURL(), body, sponsorPrivate, authed);
-    const line = `moving ${step.move} market coin of the sponsor key's block rewards to the seller's key for its first writes (lattice-sponsor starts once it has landed)`;
+    const line = `moving ${step.move} market coin of the sponsor key's block rewards to the seller's key for its first writes (the sponsor starts once it has landed)`;
     if (line !== fundLine) log((fundLine = line), tx);
   } catch (e) { log("moving the sponsor's block rewards to the seller's key: not taken yet (will retry)", e.message); }
   return false;
@@ -356,7 +356,7 @@ async function fund(first) {
 
 async function pass() {
   if (root) port = await rpcPort(root, args.lattice, authed);
-  if (!checked) { log(`Lattice ${await nodeVersion(rpcURL(), authed)}`); checked = true; }
+  if (!checked) { log(`node ${await nodeVersion(rpcURL(), authed)}`); checked = true; }
   // The market and the offer's parent first: a fresh node reads neither yet.
   {
     const { fragment, condition } = await readFragment();

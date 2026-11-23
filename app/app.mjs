@@ -258,7 +258,7 @@ const RULES = {
   anyone: { label: "Anyone can write", hint: "Anyone can write any key, and change or delete it." },
   own: { label: "Each person edits only their own keys", hint: "Every key ends with its writer's address, like <span class=\"mono\">events/42/&lt;address&gt;</span>, and only that person can change or delete it. Lists still read by prefix: <span class=\"mono\">events/</span> lists everyone's.", file: "own_keys.wasm" },
   once: { label: "Append-only (write once)", hint: "Anyone can add a new key; nobody can change or delete it after.", file: "write_once.wasm" },
-  custom: { label: "Upload your own .wasm (advanced)", hint: "Lattice policy modules you built. Hosts list the modules they run; some run any." },
+  custom: { label: "Upload your own .wasm (advanced)", hint: "Policy modules you built. Hosts list the modules they run; some run any." },
 };
 const rulesReady = Promise.all(Object.values(RULES).filter((x) => x.file).map(async (x) => {
   const bytes = new Uint8Array(await (await fetch(new URL(`./rules/${x.file}`, import.meta.url))).arrayBuffer());
@@ -569,7 +569,7 @@ async function viewCoin(view, _, current) {
   view.innerHTML = `
   <section>
     <h1>Buy ${coinName}</h1>
-    <p class="lead">Hosts are paid in ${coinName}. You buy it with ${esc(parentCoin)}, and Lattice checks both sides of the trade: nobody holds your payment in between. Launching an app buys what it needs for you.</p>
+    <p class="lead">Hosts are paid in ${coinName}. You buy it with ${esc(parentCoin)}, and the chains check both sides of the trade: nobody holds your payment in between. Launching an app buys what it needs for you.</p>
   </section>
   <section class="stack" id="you"></section>
   <section class="stack"><div class="row"><h2>For sale</h2><span class="spacer"></span><button class="btn small" id="reload">Refresh</button></div><div id="deposits"><p class="muted">Reading the market…</p></div></section>
@@ -1157,7 +1157,7 @@ async function viewWallet(view) {
       if (address !== me?.address) earning?.stop("Stopped: this browser uses another account now.");
       me = { privateKey, address };
       await loadBalances(); route();
-    } catch (err) { $("#importNote").textContent = `That file is not a Lattice key: ${err.message}`; }
+    } catch (err) { $("#importNote").textContent = `That file is not a key: ${err.message}`; }
   };
 }
 

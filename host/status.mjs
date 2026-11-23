@@ -78,6 +78,6 @@ export function report({ market, height, seller, sponsor, mine, renewals, counts
     typeof storage === "string" ? storage : storage
       ? `storage pinned by the sponsor: ${formatBytes(storage.stored, true)} of its ${formatBytes(storage.budget, true)} budget, ${formatBytes(storage.held, true)} held for uploads being paid, `
         + `${formatBytes(Math.max(0, storage.budget - storage.stored - storage.held), true)} left`
-      : "storage: no lattice-sponsor reporting it on the sponsor port (not running yet, or older than its storage report)",
+      : "storage: no sponsor reporting it on the sponsor port (not running yet, or older than its storage report)",
   ];
 }
