@@ -96,7 +96,7 @@ export function currentOffer({ offers, self, id, file }) {
 export function fundingMessage({ address, need, interval }) {
   if (BigInt(need.balance) >= BigInt(need.amount)) return undefined;
   return `Send at least ${need.amount} coin on ${need.chain} to ${address}, `
-    + `from any account that holds some, or earn it with this machine: hearth earn; this seller waits and checks again every ${interval} s.`;
+    + `from any account that holds some, or earn it with this machine: hearth earn --sponsor <url>; this seller waits and checks again every ${interval} s.`;
 }
 
 /**
@@ -113,7 +113,7 @@ export function fundingMessage({ address, need, interval }) {
 export function fundingStep({ fee, seller, sponsor, canMove, otherSponsor, chain, address, interval }) {
   if (seller >= 3n * fee) return { ready: true };
   const move = 4n * fee - seller;
-  const send = `send ${3n * fee - seller} coin on ${chain} to ${address}, or earn it with this machine: hearth earn`;
+  const send = `send ${3n * fee - seller} coin on ${chain} to ${address}, or earn it with this machine: hearth earn --sponsor <url>`;
   if (canMove && otherSponsor !== undefined) {
     return { wait: `a lattice-sponsor already answers on port ${otherSponsor} and may sign with the sponsor's key, so the seller moves nothing from it: `
       + `stop that sponsor, or ${send}. Checking again every ${interval} s.` };

@@ -145,7 +145,7 @@ test("a chain owed on an older offer stays in the fragment after the flags chang
 test("funding waits until the key holds the market coin its writes cost", () => {
   const need = (balance) => ({ chain: "Nexus/testnet/lodger", amount: 3n, balance });
   assert.equal(fundingMessage({ address: HOST, need: need(2n), interval: "30" }),
-    `Send at least 3 coin on Nexus/testnet/lodger to ${HOST}, from any account that holds some, or earn it with this machine: hearth earn; this seller waits and checks again every 30 s.`);
+    `Send at least 3 coin on Nexus/testnet/lodger to ${HOST}, from any account that holds some, or earn it with this machine: hearth earn --sponsor <url>; this seller waits and checks again every 30 s.`);
   assert.equal(fundingMessage({ address: HOST, need: need(3n), interval: "30" }), undefined, "covered: it writes");
 });
 
