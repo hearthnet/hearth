@@ -253,6 +253,8 @@ const offerPills = (m, k) => {
 
 /** A launch is in flight (it outlives its view): no other Launch may start. */
 let launchInFlight = false;
+/** A launch's failure carried into the view re-rendered from the fresh market. */
+let carriedError = null;
 async function viewLaunch(view, _, current) {
   const m = await loadMarket();
   // The fees each step pays: an order and a withdrawal on the market, a receipt on its parent.
@@ -326,7 +328,7 @@ async function viewLaunch(view, _, current) {
   // Hosts are picked for the buyer until they pick themselves (unchecking every host stays unchecked).
   let autoPick = chosen.length === 0;
   // The last launch's failure, kept across re-renders until the buyer changes something.
-  let lastError = null;
+  let lastError = carriedError; carriedError = null;
   const counted = soldPerOffer();
 
   const refresh = () => {
@@ -456,7 +458,7 @@ async function viewLaunch(view, _, current) {
         if (buying?.step !== "done") throw new Error(buying?.error ?? "Buying coin did not finish.");
         buying = null; store.set("buying", null);
         // Left this page while buying: the coin stays in the account, and nothing is paid.
-        if (!current()) { launchInFlight = false; return; }
+        if (!current()) { launchInFlight = false; refreshYou?.(); return; }
         $("#pending").innerHTML = "";
         await loadBalances();
         if ((balances.market?.balance ?? 0n) < need) throw new Error(`You hold ${fmt(balances.market?.balance ?? 0n)} ${coinName} after buying, and this takes ${fmt(need)}. Launch again to buy the rest.`);
@@ -471,7 +473,8 @@ async function viewLaunch(view, _, current) {
         const o = fresh.terms.get(k);
         const why = !o ? "is gone" : !isOpen(fresh, o) || o.until <= fresh.height + SETTLE ? "has closed"
           : fresh.offers.get(k) !== text ? "has new terms" : o.capacity <= (now.get(k) ?? 0n) ? "is full" : null;
-        if (why) { refresh(); throw new Error(`The offer at ${hostName(k.split("/")[0])} ${why} since you chose it. Check your hosts and launch again.`); }
+        // Re-render from the fresh market, so the changed offer is not chosen and sent again.
+        if (why) { launchInFlight = false; carriedError = `The offer at ${hostName(k.split("/")[0])} ${why} since you chose it. Check your hosts and launch again.`; route(); return; }
       }
       const hosts = new Set(offers.map(([k]) => k.split("/")[0]));
       const takenHere = fresh.orders.some((x) => hosts.has(x.host) && x.path === path && ["owed", "pending"].includes(verdicts.get(x.key)?.kind) && x.buyer !== me.address);
@@ -493,7 +496,7 @@ async function viewLaunch(view, _, current) {
       location.hash = `#/order/${encodeURIComponent(keys[0])}`;
     } catch (e) {
       launchInFlight = false;
-      if (!current()) return;
+      if (!current()) { refreshYou?.(); return; }
       lastError = e.message; refresh();
     }
   };
@@ -808,7 +811,7 @@ async function runPurchase() {
       for (;;) { const left = await r.deposit(cfg.market, d).catch(() => undefined); if (left === 0n) break; await sleep(5000); }
       p.step = "done";
       await loadBalances();
-      status(`Bought ${fmt(d.amountDeposited - 1n)} ${coinName}.`);
+      status(`Bought ${fmt(d.amountDeposited - await fee(cfg.market))} ${coinName}.`);
       refreshYou?.();
       if (location.hash.startsWith("#/coin")) route();
     }
