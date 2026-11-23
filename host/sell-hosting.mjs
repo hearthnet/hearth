@@ -455,7 +455,7 @@ mkdirSync(files.dir, { recursive: true });
 const pidFile = files.pid;
 writeFileSync(pidFile, `${process.pid}\n`);
 const quit = (code) => { pace?.stop(); sponsor?.stop(); rmSync(pidFile, { force: true }); process.exit(code); };
-for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { log("stopping: the pacer and the sponsor stop with the seller"); quit(0); });
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => { log("stopping: the pacer and the sponsor stop with the seller"); quit(0); });
 
 log(`selling hosting on ${marketPath} as ${self}`);
 for (;;) {

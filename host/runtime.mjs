@@ -144,7 +144,7 @@ function watchExit() {
  */
 export async function runManagedNode({ home, lattice, log = console.log, timeoutMs = 180_000, pollMs = 500 }) {
   const root = initManagedNode({ home, lattice });
-  if (await nodeAnswers(root)) return { root, stop: () => {}, owned: false };
+  if (await nodeAnswers(root)) return { root, stop: () => {}, owned: false, running: () => false };
   const logFile = join(root, "node.log");
   let child, exited, stopping = false;
   const start = () => {
@@ -162,8 +162,10 @@ export async function runManagedNode({ home, lattice, log = console.log, timeout
   owned.add(stop);
   start();
   log(`started the node in ${root} (its log: ${logFile}); it stops when this command does`);
+  // Its process is up, or being started again after exit 75.
+  const running = () => !stopping && exited === undefined;
   for (const end = Date.now() + timeoutMs; Date.now() < end;) {
-    if (await nodeAnswers(root)) return { root, stop, owned: true };
+    if (await nodeAnswers(root)) return { root, stop, owned: true, running };
     if (exited !== undefined && exited !== 75) break;
     await new Promise((r) => setTimeout(r, pollMs));
   }
@@ -174,7 +176,9 @@ export async function runManagedNode({ home, lattice, log = console.log, timeout
 /**
  * The node `hearth sell` sells from, kept up for as long as it sells: checked
  * every `everyMs`, and started again (by this process) whenever it stops
- * answering: it crashed, or the command that started it ended. `stop()` ends both.
+ * answering: it crashed, or the command that started it ended. A node this
+ * process runs is left alone while its process is up (busy, or restarting).
+ * `stop()` ends both, and so does this process ending.
  */
 export async function keepManagedNode({ home, lattice, log = console.log, everyMs = 5_000 }) {
   let current = await runManagedNode({ home, lattice, log });
@@ -184,7 +188,7 @@ export async function keepManagedNode({ home, lattice, log = console.log, everyM
     if (busy || stopped) return;
     busy = true;
     try {
-      if (!(await nodeAnswers(root)) && !stopped) {
+      if (!current.running() && !(await nodeAnswers(root)) && !stopped) {
         log(`the node in ${root} stopped answering: starting it again`);
         current = await runManagedNode({ home, lattice, log });
         if (stopped) current.stop();
@@ -192,5 +196,7 @@ export async function keepManagedNode({ home, lattice, log = console.log, everyM
     } catch (e) { log(e.message); } finally { busy = false; }
   }, everyMs);
   timer.unref();
-  return { root, stop: () => { stopped = true; clearInterval(timer); current.stop(); } };
+  const stop = () => { stopped = true; owned.delete(stop); clearInterval(timer); current.stop(); };
+  owned.add(stop);
+  return { root, stop };
 }

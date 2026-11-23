@@ -166,3 +166,34 @@ test("a hearth process ended by SIGTERM stops the node it started", async () => 
   for (let i = 0; i < 50 && !gone; i++) { await new Promise((r) => setTimeout(r, 100)); try { process.kill(node, 0); } catch { gone = true; } }
   assert.ok(gone, "the node is gone");
 });
+
+test("while the node it runs restarts (exit 75), the keeper starts no second node", async () => {
+  const { keepManagedNode } = await import("../host/runtime.mjs");
+  const home = temp();
+  const port = await freePort();
+  const dir = temp();
+  const lattice = join(dir, "lattice");
+  // The first `up` exits 75 soon after it answers; the next takes 2 s to boot.
+  writeFileSync(lattice, `#!${process.execPath}
+const fs = require("node:fs"), http = require("node:http"), path = require("node:path");
+const [verb, , root] = process.argv.slice(2);
+if (verb === "init") { fs.mkdirSync(root, { recursive: true }); fs.writeFileSync(path.join(root, "lattice.json"), JSON.stringify({ rpc: ${port} })); process.exit(0); }
+fs.mkdirSync(path.join(root, "chains/Nexus"), { recursive: true });
+fs.appendFileSync(path.join(root, "starts"), process.pid + "\\n");
+const first = fs.readFileSync(path.join(root, "starts"), "utf8").trim().split("\\n").length === 1;
+const cookie = path.join(root, "chains/Nexus/.cookie");
+setTimeout(() => {
+  const s = http.createServer((q, r) => { r.statusCode = 401; r.end("operator RPC requires the node's cookie"); }).listen(${port}, "127.0.0.1", () => fs.writeFileSync(cookie, "c"));
+  if (first) setTimeout(() => { fs.rmSync(cookie, { force: true }); s.close(); process.exit(75); }, 500);
+}, first ? 0 : 2000);
+process.on("SIGTERM", () => { fs.rmSync(cookie, { force: true }); process.exit(0); });
+`);
+  chmodSync(lattice, 0o755);
+  const kept = await keepManagedNode({ home, lattice, log: () => {}, everyMs: 100 });
+  await new Promise((r) => setTimeout(r, 4000));
+  const starts = readFileSync(join(kept.root, "starts"), "utf8").trim().split("\n").length;
+  const up = await nodeAnswers(kept.root);
+  kept.stop();
+  assert.equal(starts, 2);
+  assert.ok(up);
+});

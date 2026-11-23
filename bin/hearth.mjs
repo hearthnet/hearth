@@ -172,6 +172,15 @@ if (verb === "burn") {
   process.exit(0);
 }
 
+/** The pid of the `lattice up --root <root>` that the seller `pid`'s parent (its `hearth sell`) runs, or undefined. */
+function sellerNode(pid, root) {
+  try {
+    const rows = execFileSync("ps", ["-A", "-ww", "-o", "pid=,ppid=,command="], { encoding: "utf8" }).split("\n").map((l) => l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)).filter(Boolean);
+    const parent = rows.find(([, p]) => Number(p) === pid)?.[2];
+    return Number(rows.find(([, , pp, cmd]) => pp === parent && cmd.includes(`up --root ${root}`))?.[1]) || undefined;
+  } catch { return undefined; }
+}
+
 /** The running seller's pid from `pidFile`, or undefined (a pid left by a seller that died may name another process by now). */
 function runningSeller(pidFile) {
   if (!existsSync(pidFile)) return undefined;
@@ -325,11 +334,13 @@ if (verb === "stop") {
         try { execFileSync(service.stop[0], service.stop.slice(1), { stdio: "inherit" }); } catch (e) { console.log(`(${e.message.split("\n")[0]}: it may not have been loaded)`); }
       }
       if (pid) {
+        // The node the seller's `hearth sell` runs (none when a service or the user runs it).
+        const node = sellerNode(pid, root);
         try { process.kill(pid, "SIGTERM"); for (let i = 0; i < 100; i++) { process.kill(pid, 0); await new Promise((r) => setTimeout(r, 100)); } } catch {}
         console.log(`stopped the seller (pid ${pid}), its pacer and its sponsor`);
         // Hearth's node stops with the seller that ran it: this verb runs it now.
-        if (root === managedRoot(homedir())) {
-          for (let i = 0; i < 40 && await nodeAnswers(root); i++) await new Promise((r) => setTimeout(r, 500));
+        if (node) {
+          try { for (let i = 0; i < 1200; i++) { process.kill(node, 0); await new Promise((r) => setTimeout(r, 250)); } } catch {}
           await runManagedNode({ home: homedir(), lattice: a.lattice });
         }
       }
@@ -469,7 +480,7 @@ try {
   }
 
   const child = spawn(process.execPath, [join(HERE, "../host/sell-hosting.mjs"), ...sellArgs, "--lattice", a.lattice], { stdio: "inherit" });
-  for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => child.kill(signal));
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => child.kill(signal));
   child.on("exit", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
 } catch (e) {
   fail(e.message);
