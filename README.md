@@ -213,7 +213,7 @@ and their chains get no more blocks or sponsored writes from this host.
 ## Earning market coin
 
 ```
-npx @hearthnet/hearth earn [--until <coins>] [--workers 1] [--sponsor <url>]
+npx @hearthnet/hearth earn [--until <coins>] [--workers 1] --sponsor <url>
 ```
 
 earns market coin for the seller's address with this machine's processor,

@@ -35,9 +35,8 @@ export const WHY_SELL = "You earn Hearth coin (the market's coin): buyers' order
 export const DEFAULT_DURATION_MS = 30 * 86400 * 1000;
 /**
  * What the seller's sponsor charges for storage unless `--storage-rate`
- * says: bytes per market coin. Pins are kept until taken down, so it is the rate the
- * testnet's own storage sponsor charges on the market (10 KiB a coin: a
- * megabyte costs about a tenth of a market block's reward).
+ * says: bytes per market coin. Pins are kept until taken down: at 10 KiB a
+ * coin, a megabyte costs about a tenth of a market block's reward.
  */
 export const DEFAULT_STORAGE_RATE = 10240;
 /**

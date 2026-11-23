@@ -204,9 +204,9 @@ test("--install writes units for the node and the seller, the seller after the n
  * which layer lists each chain; `chains` maps a chain path to its status
  * (absent: not hosted).
  */
-async function freshNode({ version = "4.0.0+dev", old = false, chains = {}, balance } = {}) {
+async function freshNode({ version = "4.0.0+dev", old = false, chains = {}, balance, hosted } = {}) {
   const puts = [], posted = [];
-  let fragment;
+  let fragment = hosted ? JSON.stringify({ hostedChains: hosted }) : undefined;
   const server = createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
@@ -284,6 +284,16 @@ test("`hearth sell` beside a node older than 4.0.1 says so and stops", async () 
     const burnt = await hearth(["burn", "5", "--chain", DEFAULT_MARKET, "--root", node.root, "--lattice", node.lattice]);
     assert.equal(burnt.code, 2);
     assert.match(burnt.out, /Hearth needs Lattice 5\.0\.0 or newer/);
+  } finally { node.close(); }
+});
+
+test("a node hosting chains for another market: hearth sell names it, and writes nothing", async () => {
+  const node = await freshNode({ hosted: ["Nexus/testnet", "Nexus/testnet/lodger-3129cc", "Nexus/testnet/app1"] });
+  try {
+    const { code, out } = await sell(node);
+    assert.equal(code, 2, out);
+    assert.match(out, /hosts Nexus\/testnet Nexus\/testnet\/lodger-3129cc Nexus\/testnet\/app1 for another market, not Nexus\/hearth: give --market/);
+    assert.deepEqual(node.puts, []);
   } finally { node.close(); }
 });
 

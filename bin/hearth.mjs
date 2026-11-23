@@ -42,7 +42,7 @@
 //
 // earns market coin for the seller's key with this machine's processor.
 //
-//   npx @hearthnet/hearth burn 100 --chain Nexus/testnet
+//   npx @hearthnet/hearth burn 100 --chain Nexus
 //
 // burns coin for the seller's key on a chain from Nexus down to the market.
 import { execFileSync, spawn } from "node:child_process";
@@ -70,7 +70,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const { name, version } = JSON.parse(readFileSync(join(HERE, "../package.json"), "utf8"));
 const NODE = "[--root <node root> | --node <url> --token-file <file>] [--key <file>] [--lattice lattice]";
 const VERBS = {
-  sell: `hearth sell [--price ${DEFAULT_PRICE}] [--parent Nexus/testnet] [--chains 10]
+  sell: `hearth sell [--price ${DEFAULT_PRICE}] [--parent Nexus] [--chains 10]
                    [--url https://host.example [--proof <url>]] [--market ${DEFAULT_MARKET}]
                    ${NODE} [--offer offer.json]
                    [--id <offer id>] [--storage-offer storage.json] [--interval 30] [--fee <n>] [--once]

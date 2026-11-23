@@ -360,7 +360,13 @@ async function pass() {
   // The market and the offer's parent first: a fresh node reads neither yet.
   {
     const { fragment, condition } = await readFragment();
-    const missing = own().filter((p) => !(fragment.hostedChains ?? []).includes(p));
+    // Chains listed for another market: rewriting the list for this one
+    // would let go of what that market's buyers paid for.
+    const hosted = fragment.hostedChains ?? [];
+    if (hosted.length && !hosted.includes(marketPath)) {
+      throw Object.assign(new Error(`this node hosts ${hosted.join(" ")} for another market, not ${marketPath}: give --market <that market> to keep selling there, or run hearth stop with it first`), { fatal: true });
+    }
+    const missing = own().filter((p) => !hosted.includes(p));
     if (missing.length) {
       await rpc(FRAGMENT, { ...fragment, hostedChains: ordered([...(fragment.hostedChains ?? []), ...missing]) }, "PUT", condition);
       log("hosting", missing.join(" "));
@@ -460,7 +466,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { log("stop
 log(`selling hosting on ${marketPath} as ${self}`);
 for (;;) {
   try { await pass(); } catch (e) {
-    if (e.tooOld) { console.error(`hearth: ${e.message}`); quit(2); }
+    if (e.tooOld || e.fatal) { console.error(`hearth: ${e.message}`); quit(2); }
     log(...(e.waiting ? [e.message] : ["pass failed:", e.message]));
   }
   if (args.once) break;
