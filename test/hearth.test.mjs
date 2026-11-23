@@ -292,8 +292,17 @@ test("a node hosting chains for another market: hearth sell names it, and writes
   try {
     const { code, out } = await sell(node);
     assert.equal(code, 2, out);
-    assert.match(out, /hosts Nexus\/testnet Nexus\/testnet\/lodger-3129cc Nexus\/testnet\/app1 for another market, not Nexus\/hearth: give --market/);
+    assert.match(out, /hosts Nexus\/testnet\/lodger-3129cc Nexus\/testnet\/app1 for another market, not Nexus\/hearth: give --market/);
     assert.deepEqual(node.puts, []);
+  } finally { node.close(); }
+});
+
+test("after hearth stop left only the chains still paid for, hearth sell on the same market hosts it again", async () => {
+  const node = await freshNode({ hosted: ["Nexus/app1"] });
+  try {
+    const { code, out } = await sell(node);
+    assert.equal(code, 0, out);
+    assert.deepEqual(node.puts.map((p) => p.body.hostedChains), [["Nexus/app1", DEFAULT_MARKET]]);
   } finally { node.close(); }
 });
 

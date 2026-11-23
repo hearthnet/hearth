@@ -34,7 +34,7 @@ const cfg = {
   entry: params.get("entry") ?? "https://rpc.lattice.build",
   node: params.get("node"),
   market: params.get("market") ?? "Nexus/hearth",
-  // A fee sponsor that pays out the parent's coin for work (testnet's does); none by default.
+  // A fee sponsor that pays out the parent's coin for work; none by default.
   sponsor: params.get("sponsor") ?? "",
   blockSeconds: Number(params.get("blockSeconds") ?? 60),
 };
@@ -43,25 +43,22 @@ const parentPath = marketPath.slice(0, -1).join("/");
 const directory = marketPath.at(-1);
 const coinName = "Hearth coin", parentCoin = `${marketPath.at(-2)} coin`;
 /**
- * A node serving the market, found through Lattice: the entry node lists the
- * read URLs the market's hosts declare (GET /api/chain/endpoints), and the
- * first, in random order, whose market has the market's genesis is used.
- * Nothing found: the entry itself, which may host the market.
+ * A node serving the market, found through Lattice: the SDK's resolver asks
+ * the entry for the read URLs the market's hosts declare, and keeps those on
+ * the entry's network that serve the market (all probed at once, each with
+ * a timeout). Of those that take transactions, the first in random order
+ * whose market has the market's genesis is used. None: the entry itself.
  */
 async function findNode() {
-  const get = async (base, path) => {
-    const res = await fetch(`${base}${path}?chainPath=${encodeURIComponent(cfg.market)}`, { signal: AbortSignal.timeout(8000), cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  };
+  const market = cfg.market.split("/");
   const genesis = cfg.market === MAINNET_MARKET.path ? MAINNET_MARKET.genesis : params.get("genesis");
-  let found = [];
-  try { found = (await get(cfg.entry, "/api/chain/endpoints")).endpoints ?? []; } catch {}
-  found = found.filter((u) => /^https:\/\//.test(u)).sort(() => Math.random() - 0.5);
-  for (const url of found) {
-    try { if (!genesis || (await get(url, "/api/chain/info")).genesisHash === genesis) return url.replace(/\/$/, ""); } catch {}
-  }
-  return cfg.entry;
+  let hosts = [];
+  try { hosts = await new sdk.EndpointResolver(new sdk.NodeClient(cfg.entry, ["Nexus"])).resolve(market, AbortSignal.timeout(10_000)); } catch {}
+  const checks = hosts.filter((h) => h.declaresSubmit).sort(() => Math.random() - 0.5).map(async ({ url }) => {
+    if (genesis && (await new sdk.NodeClient(url, market).chainInfo(AbortSignal.timeout(5_000))).genesisHash !== genesis) throw new Error("another chain");
+    return url;
+  });
+  try { return await Promise.any(checks); } catch { return cfg.entry; }
 }
 if (!cfg.node) cfg.node = await findNode();
 const r = reader(sdk, cfg.node);

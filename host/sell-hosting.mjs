@@ -5,7 +5,7 @@
 // listener, with an admin token; see README.md).
 //
 //   node host/sell-hosting.mjs (--root /var/lib/lattice | --node http://10.0.0.5:8090 --token-file token) \
-//     --market Nexus/testnet/hosts --key host.json --offer offer.json [--url https://host.example] \
+//     --market Nexus/hearth --key host.json --offer offer.json [--url https://host.example] \
 //     [--proof https://host.example:8650/.well-known/lattice.json] [--storage-offer storage.json] \
 //     [--sponsor-bin lattice-sponsor] [--sponsor-port 8650] [--sponsor-url https://host.example/sponsor] \
 //     [--storage-rate 10240] [--lattice /usr/local/bin/lattice] [--interval 30] [--resume]
@@ -361,10 +361,13 @@ async function pass() {
   {
     const { fragment, condition } = await readFragment();
     // Chains listed for another market: rewriting the list for this one
-    // would let go of what that market's buyers paid for.
+    // would let go of what that market's buyers paid for. A list `hearth
+    // stop` left (the chains still paid for, under this seller's parent)
+    // is this market's.
     const hosted = fragment.hostedChains ?? [];
-    if (hosted.length && !hosted.includes(marketPath)) {
-      throw Object.assign(new Error(`this node hosts ${hosted.join(" ")} for another market, not ${marketPath}: give --market <that market> to keep selling there, or run hearth stop with it first`), { fatal: true });
+    const foreign = hosted.includes(marketPath) ? [] : hosted.filter((p) => !own().includes(p) && !parents().includes(parentOf(p)));
+    if (foreign.length) {
+      throw Object.assign(new Error(`this node hosts ${foreign.join(" ")} for another market, not ${marketPath}: give --market <that market> (and its --parent) to keep selling there`), { fatal: true });
     }
     const missing = own().filter((p) => !hosted.includes(p));
     if (missing.length) {

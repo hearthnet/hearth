@@ -323,7 +323,7 @@ coin on the market chain for a price in the parent chain's coin (a Lattice
 *deposit*). A buyer pays that price on the parent (a *receipt*) and takes the
 coin on the market chain (a *withdrawal*). Lattice checks both sides, so
 nobody holds the payment in between, and there is no exchange to trust.
-Where a fee sponsor pays out the parent's coin (testnet's does), it can
+Where a fee sponsor pays out the parent's coin, it can
 also be earned with the device's processor.
 
 **Records.** The policy (`policy/src/lib.rs`) is only filters on keys and
