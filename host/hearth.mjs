@@ -20,7 +20,7 @@ export const DEFAULT_MARKET = "Nexus/testnet/hearth";
 export const DEFAULT_TERMS = { throughput: "6000", storage: "600", period: "1d" };
 /** Why a host sells, as `hearth sell` says when it makes the seller's key. */
 export const WHY_SELL = "You earn Hearth coin (the market's coin): buyers' orders pay the seller's key, and the blocks it makes pay its sponsor's key "
-  + "(hearth sweep moves them to the seller's). Spend it on hosting or storage from any seller on the market.";
+  + "(hearth sweep moves them to the seller's). Spend it on hosting from any seller on the market.";
 /**
  * What the seller's sponsor charges for storage unless `--storage-rate`
  * says: bytes per market coin. Pins are kept until taken down: at 10 KiB a
