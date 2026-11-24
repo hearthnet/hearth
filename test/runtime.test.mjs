@@ -74,7 +74,7 @@ test("on a machine that sold nothing, a hearth command says so, and downloads an
 test("a node of your own that is not running is named, not replaced by Hearth's", async () => {
   const home = temp(), own = temp();
   writeFileSync(join(own, "lattice.json"), "{}\n");
-  const { code, out } = await run(["sell", "--price", "100/day"], { cwd: own, home });
+  const { code, out } = await run(["sell", "--throughput", "100"], { cwd: own, home });
   assert.equal(code, 2, out);
   assert.match(out, /the node at \S+ is not running: start it, or give --root/);
   assert.ok(out.includes(own.split("/").pop()), "names that node's folder");

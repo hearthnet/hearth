@@ -1,0 +1,7 @@
+{
+  "note": "The v3 Hearth market on testnet. Its spec is chain/spec-v3-testnet.json and its policy module is chain/policy-v3.wasm, by that module's CID.",
+  "path": "Nexus/testnet/hearth",
+  "genesis": "bafyreidrzde55u53grvbfs4woibgygtrex3blzdre4ibqkwlorv7x346ke",
+  "moduleCID": "bafyreidjwv6eawkoknszzpbbw5zurltzhrhpzdkj4g4hsdidj76a6sqfdi",
+  "targetBlockTime": 60000
+}

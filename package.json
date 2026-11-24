@@ -6,7 +6,7 @@
   "bin": { "hearth": "bin/hearth.mjs" },
   "files": ["bin/", "host/", "client/", "vendor/"],
   "engines": { "node": ">=22" },
-  "scripts": { "test": "node --test test/verdict.test.mjs test/storage.test.mjs test/hearth.test.mjs test/mining.test.mjs test/seller.test.mjs test/app-rules.test.mjs test/app-snippet.test.mjs test/app-anchor.test.mjs test/app-launch.test.mjs test/app-once.test.mjs test/coin.test.mjs" },
+  "scripts": { "test": "node --test test/verdict.test.mjs test/hearth.test.mjs test/mining.test.mjs test/seller.test.mjs test/app-rules.test.mjs test/app-snippet.test.mjs test/app-anchor.test.mjs test/app-launch.test.mjs test/app-once.test.mjs test/coin.test.mjs" },
   "license": "MIT",
   "homepage": "https://hearthnet.github.io/",
   "repository": { "type": "git", "url": "git+https://github.com/hearthnet/hearth.git" }

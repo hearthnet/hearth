@@ -49,3 +49,10 @@ test("a hostile node or sponsor URL can't close the snippet's script or add mark
   const json = page.slice(page.indexOf("node: ") + 6, page.indexOf(",\n", page.indexOf("node: ")));
   assert.deepEqual(JSON.parse(json), [evil]);
 });
+
+test("with no sponsor, the snippet names none and says the writing key pays the fee", () => {
+  const { sponsors, ...noSponsors } = use;
+  const page = snippet(noSponsors);
+  assert.ok(sponsors.length && !page.includes('sponsors: ["'));
+  assert.ok(page.includes("Writes pay their fee in this chain's coin, from the writing key"));
+});

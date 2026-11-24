@@ -24,9 +24,10 @@ const pin = (anchor) => anchor.checkpoint !== undefined
 
 /**
  * A complete page for `chain`, its reads pinned to `anchor`, read from
- * `nodes` (the first takes the writes), its fees paid by `sponsors`.
+ * `nodes` (the first takes the writes). Fees are paid by `sponsors` when
+ * given; with none, the writing key pays them in the chain's coin.
  */
-export function snippet({ sdkURL, chain, anchor, nodes, sponsors, ownKeys }) {
+export function snippet({ sdkURL, chain, anchor, nodes, sponsors = [], ownKeys }) {
   return `<!doctype html>
 <script type="module">
   import { connect } from ${inScript(sdkURL)};
@@ -39,7 +40,8 @@ export function snippet({ sdkURL, chain, anchor, nodes, sponsors, ownKeys }) {
     // answers, but then trusts that one node to name the chain's tip.
     // minAgree: 1,` : "// Reads trust this one node; add other hosts' nodes to check it."}
     node: ${inScript(nodes)},
-    sponsors: ${inScript(sponsors)},
+    ${sponsors.length ? `sponsors: ${inScript(sponsors)},` : `// Writes pay their fee in this chain's coin, from the writing key: give
+    // key: (a key holding some, like your premine), or add sponsors: [...].`}
   });
   const key = ${snippetKey(ownKeys)};
   await db.set(key, "Hello from my page");
