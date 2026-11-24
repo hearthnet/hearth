@@ -9,7 +9,7 @@ import { judge } from "../client/verdict.mjs";
 
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/genesis-testnet-hearth.json", import.meta.url), "utf8"));
 const MODULE = readFileSync(new URL("../chain/policy-v3.wasm", import.meta.url)).toString("base64");
-const VALUE = formatOrderValue({ genesis: fixture.genesis, volumes: fixture.volumes, modules: { bafyreidjwv6eawkoknszzpbbw5zurltzhrhpzdkj4g4hsdidj76a6sqfdi: MODULE } });
+const VALUE = formatOrderValue({ genesis: fixture.genesis, volumes: fixture.volumes, modules: { bafyreidjwv6eawkoknszzpbbw5zurltzhrhpzdkj4g4hsdidj76a6sqfdi: MODULE }, proofs: ["AAAA"] });
 const key = (n) => sdk.accountFromPrivateKey(new Uint8Array(32).fill(n)).address;
 const HOST = key(1), BUYER = key(2), OTHER = key(3);
 const OFFER = { hashrate: 1000000n, throughput: 3n, storage: 1n, period: 100n, blocks: HOST };
@@ -48,8 +48,8 @@ test("an order carries a genesis that checks out against its CIDs", () => {
   assert.equal(BigInt(g.spec.maxBlockSize), 1000000n);
   const other = Object.keys(fixture.volumes).find((c) => c !== fixture.genesis);
   const swapped = { ...fixture.volumes, [fixture.genesis]: fixture.volumes[other] };
-  assert.match(parseGenesis(sdk, parseOrderValue(formatOrderValue({ genesis: fixture.genesis, volumes: swapped, modules: {} }))).error, /does not match its CID/);
-  assert.match(parseGenesis(sdk, parseOrderValue(formatOrderValue({ genesis: fixture.genesis, volumes: fixture.volumes, modules: {} }))).error, /not exactly the spec's/);
+  assert.match(parseGenesis(sdk, parseOrderValue(formatOrderValue({ genesis: fixture.genesis, volumes: swapped, modules: {}, proofs: ["AAAA"] }))).error, /does not match its CID/);
+  assert.match(parseGenesis(sdk, parseOrderValue(formatOrderValue({ genesis: fixture.genesis, volumes: fixture.volumes, modules: {}, proofs: ["AAAA"] }))).error, /not exactly the spec's/);
   assert.match(parseOrderValue("{}").error, /keys/);
 });
 

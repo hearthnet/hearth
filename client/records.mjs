@@ -107,22 +107,26 @@ export function pathPrice(offer, specs) {
  *   volumes   base64 Volume archives by root CID: every Volume a node holds
  *             for the genesis (its block, state and spec)
  *   modules   base64 policy modules by CID: exactly the spec's
+ *   proofs    the genesis's work: base64 child-only proofs, each the bytes a
+ *             header synced between nodes carries, which the seller hands
+ *             its node with the genesis (`POST /child-blocks`)
  *
  * `parseGenesis` checks the bytes against the CIDs and reads the spec.
  */
 export function parseOrderValue(text) {
   let value;
   try { value = strictJSON(text); } catch (e) { return { error: `not strict JSON: ${e.message}` }; }
-  if (!isObject(value) || keys(value) !== "genesis,modules,volumes") return { error: "the order's keys are not genesis, volumes, modules" };
+  if (!isObject(value) || keys(value) !== "genesis,modules,proofs,volumes") return { error: "the order's keys are not genesis, volumes, modules, proofs" };
   const base64 = (o) => isObject(o) && Object.values(o).every((v) => typeof v === "string" && /^[A-Za-z0-9+/]*={0,2}$/.test(v) && v.length % 4 === 0);
   if (typeof value.genesis !== "string" || !/^bafy[a-z2-7]{50,}$/.test(value.genesis)) return { error: "genesis is not a CID" };
   if (!base64(value.volumes) || !Object.hasOwn(value.volumes, value.genesis)) return { error: "volumes is not base64 by CID with the genesis block's" };
   if (!base64(value.modules)) return { error: "modules is not base64 by CID" };
+  if (!Array.isArray(value.proofs) || !value.proofs.length || !base64({ ...value.proofs })) return { error: "proofs is not a list of base64 proofs" };
   return value;
 }
 
 /** An order's value as written. */
-export const formatOrderValue = ({ genesis, volumes, modules = {} }) => JSON.stringify({ genesis, volumes, modules });
+export const formatOrderValue = ({ genesis, volumes, modules = {}, proofs }) => JSON.stringify({ genesis, volumes, modules, proofs });
 
 const bytesOf = (base64) => Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
 

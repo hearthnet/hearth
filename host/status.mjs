@@ -10,7 +10,7 @@ import { formatBytes } from "./hearth.mjs";
  * judges them, with the specs above each ordered path read from the node
  * `n`: `{ mine, verdicts, owed, until, counts, earned }`, `owed` mapping
  * each chain owed now to the genesis its order carries
- * (`{ cid, volumes, modules }`, as `parseOrderValue` reads it).
+ * (`{ cid, volumes, modules, proofs }`, as `parseOrderValue` reads it).
  */
 export async function judgeOwn({ sdk, n, m, self }) {
   const mine = m.orders.filter((o) => o.host === self);
@@ -21,7 +21,7 @@ export async function judgeOwn({ sdk, n, m, self }) {
     const v = verdicts.get(o.key);
     if (v.kind === "owed" && v.active && !owed.has(o.path)) {
       const value = parseOrderValue(o.value);
-      owed.set(o.path, { cid: value.genesis, volumes: value.volumes, modules: value.modules });
+      owed.set(o.path, { cid: value.genesis, volumes: value.volumes, modules: value.modules, proofs: value.proofs });
       until.set(o.path, v.until);
     }
   }
