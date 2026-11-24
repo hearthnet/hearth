@@ -1136,7 +1136,13 @@ async function viewOrder(view, key, current) {
         if (e.code === "disagree" && now.length) throw new Error(disagreeMessage(now));
         throw e;
       }
-    } catch (e) { note.style.color = "var(--bad)"; note.textContent = `The test write failed: ${e.message}`; }
+    } catch (e) {
+      note.style.color = "var(--bad)";
+      // A sponsor pays fees from its coin on this chain, which its blocks pay it: on a chain just launched it has none yet.
+      note.textContent = /insufficientFloat/.test(e.message)
+        ? "The test write failed: your hosts' sponsors hold no coin on this chain yet. The blocks they make pay them, so try again in a few minutes."
+        : `The test write failed: ${e.message}`;
+    }
   });
   $("#renew")?.addEventListener("click", async () => {
     const periods = BigInt(Math.max(1, Math.floor(Number($("#more").value) || 1)));
