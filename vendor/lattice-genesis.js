@@ -1,10 +1,13 @@
 // Child-chain genesis built in the browser exactly as lattice-node builds it.
 //
 //   const { buildChildGenesis } = await loadGenesis(new URL("./lattice_genesis.wasm", import.meta.url));
-//   const { cid, volumes } = buildChildGenesis({ spec, chainPath, premineTo, genesisTransactions, parentStateCID, timestamp });
+//   const { cid, volumes, proofs } = buildChildGenesis({ spec, chainPath, premineTo, genesisTransactions, parentStateCID, timestamp });
 //
 // `volumes` maps each Volume root CID to its archive, byte-identical to what a
-// node serves at GET /volumes/<cid>. Throws Error with the builder's reason.
+// node serves at GET /volumes/<cid>. `proofs` holds the genesis's work as
+// base64 strings, each exactly one element of a synced header's
+// `WireHeaderEntry.proofs` (a serialized `ChildBlockProof`, self-contained:
+// it needs no Volume beyond itself). Throws Error with the builder's reason.
 
 /** @param {URL | string | Response | BufferSource | WebAssembly.Module} source */
 export async function loadGenesis(source) {
@@ -50,8 +53,24 @@ export async function loadGenesis(source) {
       offset += 4;
       volumes[root] = frame.slice(offset, (offset += size));
     }
-    return { cid, volumes };
+    const proofCount = view.getUint16(offset);
+    offset += 2;
+    const proofs = [];
+    for (let index = 0; index < proofCount; index += 1) {
+      const size = view.getUint32(offset);
+      offset += 4;
+      proofs.push(base64(frame.subarray(offset, (offset += size))));
+    }
+    return { cid, volumes, proofs };
   }
 
   return { buildChildGenesis };
+}
+
+function base64(bytes) {
+  let binary = "";
+  for (let at = 0; at < bytes.length; at += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+  }
+  return btoa(binary);
 }
