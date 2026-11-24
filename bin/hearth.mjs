@@ -73,7 +73,7 @@ const { name, version } = JSON.parse(readFileSync(join(HERE, "../package.json"),
 const NODE = "[--root <node root> | --node <url> --token-file <file>] [--key <file>] [--lattice <path>]";
 const VERBS = {
   sell: `hearth sell [--price ${DEFAULT_PRICE}] [--parent Nexus] [--chains 10]
-                   [--public | --url https://host.example [--proof <url>]] [--market ${DEFAULT_MARKET}]
+                   [--url https://host.example [--proof <url>] | --public | --key-only] [--market ${DEFAULT_MARKET}]
                    ${NODE} [--offer offer.json]
                    [--id <offer id>] [--storage-offer storage.json] [--interval 30] [--fee <n>] [--once]
                    [--sponsor-bin <path>] [--sponsor-port 8650] [--sponsor-url <https url>]
@@ -101,7 +101,7 @@ try { parsed = parseArgs({
   options: {
     root: { type: "string" }, node: { type: "string" }, "token-file": { type: "string" },
     market: { type: "string", default: DEFAULT_MARKET }, key: { type: "string" }, offer: { type: "string" },
-    id: { type: "string" }, url: { type: "string" }, proof: { type: "string" }, public: { type: "boolean" }, "storage-offer": { type: "string" },
+    id: { type: "string" }, url: { type: "string" }, proof: { type: "string" }, public: { type: "boolean" }, "key-only": { type: "boolean" }, "storage-offer": { type: "string" },
     lattice: { type: "string" }, interval: { type: "string", default: "30" }, "storage-budget": { type: "string" }, once: { type: "boolean", default: false }, fee: { type: "string" },
     price: { type: "string" }, parent: { type: "string" }, chains: { type: "string" },
     install: { type: "boolean", default: false }, resume: { type: "boolean", default: false }, float: { type: "string", default: "100" },
@@ -137,6 +137,8 @@ async function nodeRoot({ create = false, install = false } = {}) {
   const root = managedRoot(home);
   if (!create && !existsSync(join(root, "hearth/seller.json"))) fail("nothing is sold from this machine yet: run hearth sell (or give --root, or --node with --token-file)");
   a.lattice ??= (await tools()).lattice;
+  // The node Hearth runs is reachable by default: with no URL of the seller's own, a tunnel.
+  if (create) a.public ??= !a["key-only"] && !a.url && !a.proof && !a["sponsor-url"];
   if (create && a.public) {
     // Read by anyone through the tunnel, and taking their writes: set before the node starts.
     initManagedNode({ home, lattice: a.lattice });
@@ -153,7 +155,7 @@ function publicReadPort(root) {
   const get = (key) => { try { return JSON.parse(execFileSync(a.lattice, ["config", "get", key, "--root", root], { encoding: "utf8" })); } catch { return undefined; } };
   const port = get("publicRead");
   if (!Number.isInteger(port) || port <= 0 || get("publicSubmit") !== true) {
-    fail(`--public serves the node's public read port, and the node at ${root} has none taking writes: run\n  ${a.lattice} config set publicRead=${PUBLIC_READ_PORT} publicSubmit=true --root ${root}\nthen restart the node`);
+    fail(`--public serves the node's public read port, and the node at ${root} has none taking writes: run\n  ${a.lattice} config set publicRead=${PUBLIC_READ_PORT} publicSubmit=true --root ${root}\nthen restart the node (or sell with --key-only, or --url)`);
   }
   return port;
 }
@@ -495,7 +497,7 @@ try {
     const program = self.includes("/_npx/") ? [join(bin, "npx"), "--yes", `${name}@${version}`] : [nodePath, self];
     const lattice = a.lattice.includes("/") ? resolve(a.lattice) : onPath(a.lattice) ?? a.lattice;
     // A service restart is not the operator: it never reopens a closed offer.
-    const command = [...program, "sell", ...sellArgs, ...(a.resume ? [] : ["--resume"]), ...(a.public ? ["--public"] : []), "--lattice", lattice];
+    const command = [...program, "sell", ...sellArgs, ...(a.resume ? [] : ["--resume"]), ...(a["key-only"] ? ["--key-only"] : []), "--lattice", lattice];
     const sponsorDir = a["sponsor-bin"]?.includes("/") ? [dirname(resolve(a["sponsor-bin"]))] : [];
     const path = [...new Set([bin, ...(lattice.startsWith("/") ? [dirname(lattice)] : []), ...sponsorDir, "/usr/local/bin", "/usr/bin", "/bin"])].join(delimiter);
     const { units, load, note } = serviceUnits({ platform: process.platform, home: homedir(), command, nodeCommand: root && [lattice, "up", "--root", root], path });
