@@ -183,7 +183,8 @@ stays on sale). It keeps hosting the parents of all its offers still on
 sale, so chains owed on an old one stay hosted.
 
 **Key only or verified.** With `--key-only` (or a node of your own and
-neither `--url` nor `--public`) the host writes no url record:
+neither `--url` nor `--public`) the host writes no url record, and removes
+one it wrote before:
 it claims no domain, so the app lists its offers under its key, marked
 *Key only*, for buyers to judge by its record. With
 `--url https://host.example` (and `--proof`, see *Verified hosts*) and

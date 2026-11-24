@@ -387,6 +387,14 @@ test("`hearth sell --install` writes the node's and the seller's units for this 
   assert.ok(unit.includes(join(node.root, `hearth/${offerFromFlags({ price: "100/day" }).id}.json`)) && unit.includes(node.sponsor));
   assert.ok(unit.includes("--resume"), "a service restart never reopens a closed offer");
   assert.ok(!unit.includes("--public") && !unit.includes("--sponsor-loopback"), "a node of your own is not made public unless --public");
+  // With --public, the service runs `hearth sell --public`, and every flag it carries is one hearth sell takes.
+  const pub = await hearth(["sell", "--price", "100/day", "--root", node.root, "--install", "--public", "--lattice", node.lattice, "--sponsor-bin", node.sponsor], { HOME: home, PATH: `${bin}:${process.env.PATH}` });
+  assert.equal(pub.code, 0, pub.out);
+  const pubUnit = readFileSync(file, "utf8");
+  assert.ok(pubUnit.includes("--public") && !pubUnit.includes("--sponsor-loopback"), pubUnit);
+  const flags = [...pubUnit.matchAll(/--([a-z][a-z-]*)/g)].map((m) => m[1]);
+  const accepted = readFileSync(new URL("../bin/hearth.mjs", import.meta.url), "utf8");
+  for (const f of new Set(flags)) if (!["user", "now", "no-block"].includes(f)) assert.ok(accepted.includes(`"${f}"`) || accepted.includes(` ${f}: {`), `the service passes --${f}, which hearth sell must take`);
   assert.ok(existsSync(join(node.root, "hearth/reopen")) && !existsSync(join(node.root, "hearth/closing")), "but installing puts the offer on sale: the service's next start writes it once");
   assert.match(out, process.platform === "darwin" ? /launchctl bootstrap gui\/\$\(id -u\) .*net\.hearth\.node\.plist && launchctl bootstrap/ : /systemctl --user enable --now hearth-node.service hearth.service/);
 });

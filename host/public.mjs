@@ -30,7 +30,9 @@ export function startProxy({ port = 0, nodePort, sponsorPort, seller }) {
     const to = sponsor ? sponsorPort : nodePort;
     const rest = sponsor ? path.slice("/sponsor".length) : path;
     // End to end headers only, and none a client could use to pose as another address.
-    const headers = Object.fromEntries(Object.entries(req.headers).filter(([k]) => !HOP.has(k) && !k.startsWith("proxy-") && !k.startsWith("x-forwarded-") && k !== "forwarded" && k !== "x-real-ip"));
+    const named = new Set(String(req.headers.connection ?? "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean));
+    // The body's framing (transfer-encoding) stays: the node must see where the body ends.
+    const headers = Object.fromEntries(Object.entries(req.headers).filter(([k]) => k === "transfer-encoding" || (!HOP.has(k) && !named.has(k) && !k.startsWith("proxy-") && !k.startsWith("x-forwarded-") && k !== "forwarded" && k !== "x-real-ip")));
     const forwarded = request({ host: "127.0.0.1", port: to, method: req.method, path: rest.startsWith("/") ? rest : `/${rest}`,
       headers: { ...headers, host: `127.0.0.1:${to}` } }, (answer) => {
       res.writeHead(answer.statusCode ?? 502, Object.fromEntries(Object.entries(answer.headers).filter(([k]) => !HOP.has(k))));
@@ -42,6 +44,7 @@ export function startProxy({ port = 0, nodePort, sponsorPort, seller }) {
       res.writeHead(502, { "Content-Type": "text/plain" });
       res.end(sponsor ? "the sponsor does not answer" : "the node does not answer");
     });
+    res.on("close", () => { if (!res.writableFinished) forwarded.destroy(); });
     req.pipe(forwarded);
   });
   return new Promise((ok, fail) => {

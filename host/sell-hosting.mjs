@@ -116,8 +116,6 @@ const { values: args } = parseArgs({
     resume: { type: "boolean", default: false },
     // The sponsor stays on loopback though public (a proxy beside it serves --sponsor-url).
     "sponsor-loopback": { type: "boolean", default: false },
-    // No URL at all: a url record written before is removed.
-    "key-only": { type: "boolean", default: false },
   },
 });
 for (const name of ["market", "key"]) if (!args[name]) throw new Error(`--${name} is required`);
@@ -299,8 +297,9 @@ async function ensureOffer(m, newest) {
     log("writing storage offer", offerKey(self, storageFile.id, m.height), await send([{ key: offerKey(self, storageFile.id, m.height), newValue: value }]));
     return true;
   }
-  if (args["key-only"] && m.urlValues.has(self)) {
-    log("removing the url record: key only", await send([{ key: urlKey(self), oldValue: m.urlValues.get(self) }]));
+  if (!urlValue && m.urlValues.has(self)) {
+    // Sold with no URL: a url record from before (an old tunnel's, say) would hide the host's offers.
+    log("removing the url record: selling with no URL", await send([{ key: urlKey(self), oldValue: m.urlValues.get(self) }]));
     return true;
   }
   if (urlValue && m.urlValues.get(self) !== urlValue) {

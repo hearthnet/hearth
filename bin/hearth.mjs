@@ -141,8 +141,9 @@ async function nodeRoot({ create = false, install = false } = {}) {
     // Public (read by anyone through the tunnel, taking their writes) or not, set before the node starts.
     initManagedNode({ home, lattice: a.lattice });
     a.public ??= defaultPublic();
-    execFileSync(a.lattice, a.public ? ["config", "set", `publicRead=${PUBLIC_READ_PORT}`, "publicSubmit=true", "--root", root]
-      : ["config", "unset", "publicRead", "publicSubmit", "--root", root], { stdio: "ignore" });
+    // --key-only closes the port the tunnel used; --url leaves it as the operator set it (a domain's proxy may use it).
+    if (a.public) execFileSync(a.lattice, ["config", "set", `publicRead=${PUBLIC_READ_PORT}`, "publicSubmit=true", "--root", root], { stdio: "ignore" });
+    else if (a["key-only"]) execFileSync(a.lattice, ["config", "unset", "publicRead", "publicSubmit", "--root", root], { stdio: "ignore" });
   }
   if (install) return initManagedNode({ home, lattice: a.lattice });
   // The seller keeps its node up; another verb runs it for as long as it takes.
@@ -368,7 +369,8 @@ if (verb === "stop") {
           // Gone, or a zombie (an init that reaps no orphans leaves one).
           const alive = () => {
             try { process.kill(node, 0); } catch { return false; }
-            try { return !execFileSync("ps", ["-o", "stat=", "-p", String(node)], { encoding: "utf8" }).trim().startsWith("Z"); } catch { return true; }
+            try { return !execFileSync("ps", ["-o", "stat=", "-p", String(node)], { encoding: "utf8" }).trim().startsWith("Z"); } catch {}
+            try { return readFileSync(`/proc/${node}/stat`, "utf8").split(") ").pop()[0] !== "Z"; } catch { return true; }
           };
           for (let i = 0; i < 1200 && alive(); i++) await new Promise((r) => setTimeout(r, 250));
           await runManagedNode({ home: homedir(), lattice: a.lattice });
@@ -490,7 +492,6 @@ try {
   const sellArgs = [...where, "--market", a.market, "--key", key, "--offer", offerPath,
     ...pass("url"), ...pass("proof"), ...pass("fee"), ...pass("burn"), ...pass("burn-chain"), ...(a["storage-offer"] ? ["--storage-offer", resolve(a["storage-offer"])] : []),
     ...sponsorBin, ...pass("sponsor-port"), ...pass("sponsor-url"), ...pass("storage-rate"), ...pass("storage-budget"),
-    ...(a.public ? ["--sponsor-loopback"] : []), ...(a["key-only"] ? ["--key-only"] : []),
     "--interval", a.interval, ...(a.once ? ["--once"] : []), ...(a.resume ? ["--resume"] : [])];
 
   if (a.install) {
@@ -524,12 +525,13 @@ try {
     process.exit(0);
   }
 
-  const child = spawn(process.execPath, [join(HERE, "../host/sell-hosting.mjs"), ...sellArgs, "--lattice", a.lattice], { stdio: "inherit" });
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => child.kill(signal));
+  const child = spawn(process.execPath, [join(HERE, "../host/sell-hosting.mjs"), ...sellArgs, ...(a.public ? ["--sponsor-loopback"] : []), "--lattice", a.lattice], { stdio: "inherit" });
+  let stopping = false;
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => { stopping = true; child.kill(signal); });
   // Buyers reach the chains only through the tunnel: without it, stop, failed (a service starts it all again).
   let tunnelGone = false;
   child.on("exit", (code, signal) => process.exit(tunnelGone ? 1 : code ?? (signal ? 1 : 0)));
-  tunnel?.child.on("exit", (code) => { tunnelGone = true; console.error(`hearth: the tunnel stopped (cloudflared exited ${code}): stopping the seller`); child.kill("SIGTERM"); });
+  tunnel?.child.on("exit", (code) => { if (stopping) return; tunnelGone = true; console.error(`hearth: the tunnel stopped (cloudflared exited ${code}): stopping the seller`); child.kill("SIGTERM"); });
 } catch (e) {
   fail(e.message);
 }
