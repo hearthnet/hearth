@@ -1,7 +1,7 @@
 // Transactions for the market, built as the SDK's bodies, signed with one
 // key, and sent to a node. The bodies follow the policy: an order's payment
 // credits come in the order hosts are first owed.
-import { CREATED_WINDOW, RENEW, formatOffer, formatPayload, offerKey, orderKey, storageOrderValue, urlKey } from "./records.mjs";
+import { CREATED_WINDOW, RENEW, formatOffer, formatPayload, offerKey, orderKey, pathPrice, storageOrderValue, urlKey } from "./records.mjs";
 
 const empty = { actions: [], depositActions: [], receiptActions: [], withdrawalActions: [] };
 
@@ -34,7 +34,7 @@ export function offerActions({ host, id, offer, height, url, oldURL }) {
  * `height`, the market's current height, for `path`, built from `payload`.
  */
 export function orderWrite({ host, id, offer, buyer, path, payload, periods = 1n, height }) {
-  const paid = offer.price * periods;
+  const paid = pathPrice(offer, path) * periods;
   return {
     actions: [{ key: orderKey({ host, id, payer: buyer, height, paid, path }), newValue: formatPayload(payload) }],
     payments: [{ to: host, amount: paid }],
@@ -44,7 +44,7 @@ export function orderWrite({ host, id, offer, buyer, path, payload, periods = 1n
 
 /** The write and payment for `periods` more periods of `offer` on `path`, paid by `payer` at `height`. */
 export function renewWrite({ host, id, offer, payer, path, periods = 1n, height }) {
-  const paid = offer.price * periods;
+  const paid = pathPrice(offer, path) * periods;
   return {
     actions: [{ key: orderKey({ host, id, payer, height, paid, path }), newValue: RENEW }],
     payments: [{ to: host, amount: paid }],

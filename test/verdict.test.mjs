@@ -256,3 +256,27 @@ test("an offer ends at the latest `until` any version names", () => {
   const short = [version({ until: 1000n }), version({ created: 300n, until: 5000n }), version({ created: 400n, until: 400n })];
   assert.equal(judged([o], { versions: short }).get(o.key).until, 5000n, "extended at 300, closed at 400: still 5000");
 });
+
+test("whole path: an order pays the price for each chain on its path, Nexus included", async () => {
+  const { orderWrite, renewWrite } = await import("../client/tx.mjs");
+  const { pathPrice } = await import("../client/records.mjs");
+  const WHOLE = { ...OFFER, wholePath: true };   // under Nexus/testnet: Nexus, Nexus/testnet, the chain = 3 × 50
+  const text = offerText(WHOLE.created, formatOffer(WHOLE));
+  assert.ok(text.endsWith("\nwhole path"));
+  assert.equal(parseOffer(text).wholePath, true);
+  assert.equal(parseOffer(offerText(OFFER.created, formatOffer(OFFER))).wholePath, undefined, "an offer from before 2.1 is priced per order");
+  assert.equal(pathPrice(WHOLE, "Nexus/testnet/x"), 150n);
+  assert.equal(pathPrice(OFFER, "Nexus/testnet/x"), 50n);
+
+  const at = (orders, renewals = []) => judge({ sdk, height: 1000n, versions: offers(WHOLE), orders, renewals });
+  const short = order({ paid: 50n });
+  assert.equal(at([short]).get(short.key).kind, "void", "one chain's price is less than one period of the path");
+  const one = order({ paid: 150n }), two = order({ buyer: B, paid: 300n, path: "Nexus/testnet/y" });
+  const v = at([one, two], [renewal({ created: 300n, paid: 150n })]);
+  assert.equal(v.get(one.key).until, 200n + 1440n + 1440n, "one period, and one renewed");
+  assert.equal(v.get(two.key).until, 200n + 2880n, "two periods");
+
+  const w = orderWrite({ host: HOST, id: "o", offer: WHOLE, buyer: A, path: "Nexus/testnet/x", payload: { spec: SPEC, premineTo: null, modules: {}, genesisTransactions: [] }, periods: 2n, height: 500n });
+  assert.equal(w.payments[0].amount, 300n);
+  assert.equal(renewWrite({ host: HOST, id: "o", offer: WHOLE, payer: A, path: "Nexus/testnet/x", periods: 1n, height: 500n }).payments[0].amount, 150n);
+});

@@ -231,7 +231,7 @@ async function send(actions) {
 let told;
 /** What a version sells, and until when: printed once before it is first written. */
 function tell(offer, height, targetBlockTime) {
-  const text = `selling ${offer.capacity} chains under ${offer.parent} at ${offer.price} market coin per ${offer.period} market blocks`
+  const text = `selling ${offer.capacity} chains under ${offer.parent} at ${offer.price} market coin per chain on the path per ${offer.period} market blocks`
     + `, ${sponsorURL ? `sponsoring writes and storage at ${sponsorURL}` : "with no public sponsor (no --sponsor-url)"}`
     + `, until market block ${offer.until} (about ${new Date(Date.now() + Number(offer.until - height) * Number(targetBlockTime)).toISOString().slice(0, 10)}): `
     + "an offer stays on sale until then; close it with `hearth stop`";
@@ -265,11 +265,12 @@ async function nextVersion(m, newest) {
     if (line !== saidOff) log((saidOff = line));
     return undefined;
   } else {
-    if (was.blocks === sponsorAddress && was.sponsor === sponsorURL) return undefined;
+    if (was.blocks === sponsorAddress && was.sponsor === sponsorURL && was.wholePath) return undefined;
     offer = { ...was, created: m.height };
     delete offer.mines;
   }
   offer.blocks = sponsorAddress;
+  offer.wholePath = true;   // an offer from before 2.1 gets a version priced per chain on the path
   if (sponsorURL) offer.sponsor = sponsorURL; else delete offer.sponsor;
   if (!parseOffer(offerText(offer.created, formatOffer(offer)))) throw new Error("the offer file does not make a valid offer");
   tell(offer, m.height, spec.targetBlockTime);

@@ -75,6 +75,10 @@ const OFFER_NUMBERS = new Set(["created", "price", "period", "until", "capacity"
  *                      host runs no public sponsor.
  *   mines <n>          read from old offers only: a claimed mining rate in
  *                      hashes per second (`offer.mines`). Nothing writes it.
+ *   whole path         the price is per chain on the ordered path, Nexus
+ *                      included (`offer.wholePath`, `pathPrice`): a host
+ *                      runs every chain on it. Without the line (offers
+ *                      written before 2.1) the price is per order.
  *
  * A version whose `until` is at or below its own `created` is a close
  * (`isClosed`): `hearth stop` writes one.
@@ -97,6 +101,7 @@ export function parseOffer(text) {
     optional.mines = decimal(rest.shift().slice("mines ".length));
     if (!optional.mines) return undefined;
   }
+  if (rest[0] === "whole path") { rest.shift(); optional.wholePath = true; }
   if (rest.length || lines.length !== OFFER_FIELDS.length) return undefined;
   const offer = {};
   for (const [i, name] of OFFER_FIELDS.entries()) {
@@ -116,7 +121,7 @@ export function parseOffer(text) {
     if (cids.some((cid) => !/^bafyrei[a-z2-7]{52}$/.test(cid)) || new Set(cids).size !== cids.length) return undefined;
     offer.modules = cids;
   }
-  for (const name of ["blocks", "sponsor", "mines"]) if (optional[name] !== undefined) offer[name] = optional[name];
+  for (const name of ["blocks", "sponsor", "mines", "wholePath"]) if (optional[name] !== undefined) offer[name] = optional[name];
   return offer;
 }
 
@@ -126,13 +131,17 @@ export const isClosed = (offer) => offer.until <= offer.created;
 /** An offer's text for `parseOffer`: `created` from its key, then its stored value. */
 export const offerText = (created, value) => `created ${created}\n${value}`;
 
-/** An offer's value as stored: its lines without `created`, then `blocks` and `sponsor` when it has them (never `mines`). */
+/** An offer's value as stored: its lines without `created`, then `blocks`, `sponsor` and `whole path` when it has them (never `mines`). */
 export function formatOffer(offer) {
   return OFFER_FIELDS.filter((name) => name !== "created").map((name) => {
     const value = name !== "modules" ? offer[name] : offer.modules === "any" ? "any" : offer.modules.join(",");
     return `${name} ${value}`;
-  }).join("\n") + (offer.blocks === undefined ? "" : `\nblocks ${offer.blocks}`) + (offer.sponsor === undefined ? "" : `\nsponsor ${offer.sponsor}`);
+  }).join("\n") + (offer.blocks === undefined ? "" : `\nblocks ${offer.blocks}`) + (offer.sponsor === undefined ? "" : `\nsponsor ${offer.sponsor}`)
+    + (offer.wholePath ? "\nwhole path" : "");
 }
+
+/** What one period of `offer` costs for `path`: its price for each chain on the path with `whole path`, else its price. */
+export const pathPrice = (offer, path) => (offer.wholePath ? offer.price * BigInt(path.split("/").length) : offer.price);
 
 /** Where an offer text's `created` line says it was written, or undefined. */
 const createdOf = (text) => { const m = /^created (0|[1-9][0-9]*)\n/.exec(text ?? ""); return m ? BigInt(m[1]) : undefined; };

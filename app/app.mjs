@@ -9,7 +9,7 @@
 import * as sdk from "../vendor/lattice-sdk.js";
 import { reader, holdsVolume } from "../client/market.mjs";
 import { judge, judgeStorage, sameGenesis } from "../client/verdict.mjs";
-import { parseOffer, parseOrderKey, parsePayload, parseStorageOffer, parseHostURL, offerAt, isClosed, moduleCID, isAddress, SETTLE, burnAddress, pathFromNexus } from "../client/records.mjs";
+import { parseOffer, parseOrderKey, parsePayload, parseStorageOffer, parseHostURL, offerAt, isClosed, moduleCID, isAddress, SETTLE, burnAddress, pathFromNexus, pathPrice } from "../client/records.mjs";
 import { checkListed, checkServing, sponsorURL as askable } from "../client/service.mjs";
 import { snippet } from "./snippet.mjs";
 import { uniqueNodes, nodesNow, chooseAnchor, disagreeMessage, blocksTime, CHECKPOINT_AFTER, WALK } from "./anchor.mjs";
@@ -367,7 +367,9 @@ async function viewLaunch(view, _, current) {
       && s.maxBlockSize <= o.maxBlockSize && s.maxStateGrowth <= o.maxStateGrowth && s.targetBlockTime >= o.minTargetBlockTime
       && s.maxNumberOfTransactionsPerBlock <= o.maxNumberOfTransactionsPerBlock
       && (o.modules === "any" || want.every((c) => o.modules.includes(c))));
-    fits.sort(([, a], [, b]) => (a.price * b.period < b.price * a.period ? -1 : 1));
+    // One period of a chain launched under the offer's parent: with `whole path`, each chain on the path.
+    const chainPrice = (o) => pathPrice(o, `${o.parent}/-`);
+    fits.sort(([, a], [, b]) => (chainPrice(a) * b.period < chainPrice(b) * a.period ? -1 : 1));
     const room = (k, o) => o.capacity - (counted.get(k) ?? 0n);
     // One offer per host, its cheapest with room, so each pick is another host.
     const byHost = new Map();
@@ -394,7 +396,7 @@ async function viewLaunch(view, _, current) {
           const full = left <= 0n, elsewhere = parent && o.parent !== parent;
           return `<tr><td><input type="checkbox" name="offer" value="${esc(k)}" ${chosen.includes(k) ? "checked" : ""} ${full || elsewhere ? "disabled" : ""} aria-label="Choose ${esc(short(host))}"></td>
             <td><div>${esc(hostName(host))}${m.vouched.get(host)?.keyOnly ? ` ${keyOnlyPill}` : ""}</div></td>
-            <td class="num"><b>${fmt(o.price)}</b> <span class="muted small">per ${duration(o.period)}</span></td>
+            <td class="num"><b>${fmt(chainPrice(o))}</b> <span class="muted small">per ${duration(o.period)}${o.wholePath ? `<br>${fmt(o.price)} for each of the ${pathFromNexus(`${o.parent}/-`).length} chains on the path` : ""}</span></td>
             <td>${full ? `<span class="pill bad">Full</span>` : `<span class="small">${fmt(left)} of ${fmt(o.capacity)}</span>`}</td>
             <td class="small">${recordLine(st)}</td></tr>`;
         }).join("")}</tbody></table></div>`;
@@ -411,10 +413,10 @@ async function viewLaunch(view, _, current) {
     $("#pathFull").textContent = path || "…";
     const lengths = [...new Set(offers.map(([, o]) => o.period))];
     $("#periodHint").textContent = lengths.length === 1 ? `× ${duration(lengths[0])} = ${duration(lengths[0] * periods)}` : "";
-    const cost = offers.reduce((sum, [, o]) => sum + o.price * periods, 0n);
+    const cost = offers.reduce((sum, [, o]) => sum + chainPrice(o) * periods, 0n);
     $("#cost").innerHTML = offers.length === 0 ? ""
       : offers.length === 1 ? `<b>${fmt(cost)} ${coinName}</b> for ${duration(offers[0][1].period * periods)} of hosting`
-      : `<b>${fmt(cost)} ${coinName}</b>: ${offers.map(([k, o]) => `${fmt(o.price * periods)} for ${duration(o.period * periods)} at ${esc(hostName(k.split("/")[0]))}`).join(", ")}`;
+      : `<b>${fmt(cost)} ${coinName}</b>: ${offers.map(([k, o]) => `${fmt(chainPrice(o) * periods)} for ${duration(o.period * periods)} at ${esc(hostName(k.split("/")[0]))}`).join(", ")}`;
     const out = { offers, texts: chosen.map((k) => [k, m.offers.get(k)]), path, periods, s: spec(), mods, nameOK };
     const note = $("#launchNote");
     const button = $("#launch");
@@ -471,7 +473,7 @@ async function viewLaunch(view, _, current) {
       // after, the coin bought stays in this browser's account.
       await loadBalances();
       if (!balances.market || !balances.parent) throw new Error(`Could not read your balance from ${cfg.node}. Try again.`);
-      const cost = offers.reduce((sum, [, o]) => sum + o.price * periods, 0n), need = cost + marketFee;
+      const cost = offers.reduce((sum, [, o]) => sum + pathPrice(o, path) * periods, 0n), need = cost + marketFee;
       const missing = need - balances.market.balance;
       if (missing > 0n) {
         await readSales();
@@ -886,7 +888,7 @@ async function viewHosts(view, _, current) {
         <div><p class="muted small">Paid, not served</p><p class="stat" style="${s && s.full + s.taken ? "color:var(--bad)" : ""}">${s ? s.full + s.taken : 0}</p><p class="small muted">${s && s.unserved ? `${fmt(s.unserved)} ${coinName} paid` : "Orders it took and did not owe"}</p></div>
         <div><p class="muted small">Void</p><p class="stat">${s?.void ?? 0}</p><p class="small muted">The buyer's order broke the offer's terms</p></div>
       </div>
-      ${offers.length === 0 ? `<p class="small muted">No open offers now.</p>` : `<div class="table-scroll"><table><thead><tr><th>Offer</th><th class="num">Price</th><th>Limits</th><th>Modules</th><th>Mines</th><th>Ends</th></tr></thead><tbody>${offers.map(([k, o]) => `<tr><td class="mono">${esc(k.split("/")[1])}</td><td class="num">${fmt(o.price)} / ${duration(o.period)}</td>
+      ${offers.length === 0 ? `<p class="small muted">No open offers now.</p>` : `<div class="table-scroll"><table><thead><tr><th>Offer</th><th class="num">Price</th><th>Limits</th><th>Modules</th><th>Mines</th><th>Ends</th></tr></thead><tbody>${offers.map(([k, o]) => `<tr><td class="mono">${esc(k.split("/")[1])}</td><td class="num">${fmt(o.price)} / ${duration(o.period)}${o.wholePath ? `<br><span class="muted">per chain on the path</span>` : ""}</td>
         <td class="small">${fmt(o.maxBlockSize / 1000n)} kB blocks, ≥ ${Number(o.minTargetBlockTime) / 1000} s, ${fmt(o.maxNumberOfTransactionsPerBlock)} tx</td><td class="small">${o.modules === "any" ? "any" : `${o.modules.length} listed`}</td>
         <td class="small">${o.mines ? `claims ${formatRate(o.mines)}` : `<span class="muted">no claim</span>`}</td>
         <td class="small">in ${duration(o.until - m.height)}</td></tr>`).join("")}</tbody></table></div>`}
@@ -1079,7 +1081,7 @@ async function viewOrder(view, key, current) {
      <div><p class="muted small">Paid until</p><p class="stat" style="font-size:20px">${v.active ? `in ${duration(v.until - m.height)}` : "ended"}</p></div></div>
      <p class="small" id="making" hidden></p>
      ${snippetBlock}</section>` : ""}
-  ${v.kind === "owed" || v.kind === "pending" ? `<section class="stack"><h2>Keep it running</h2><p class="muted">When paid time ends, this host may stop hosting the chain and drop its data; anyone still hosting it keeps it. ${renewable ? `Anyone can pay for more time. Each period is ${duration(offer.period)} for ${fmt(offer.price)} ${coinName}${offer.until < (v.until ?? 0n) + offer.period ? `; this offer ends in ${duration(offer.until - m.height)}, and no time past that is owed` : ""}.` : "This offer is closed, so it sells no more time here."}</p>
+  ${v.kind === "owed" || v.kind === "pending" ? `<section class="stack"><h2>Keep it running</h2><p class="muted">When paid time ends, this host may stop hosting the chain and drop its data; anyone still hosting it keeps it. ${renewable ? `Anyone can pay for more time. Each period is ${duration(offer.period)} for ${fmt(pathPrice(offer, path))} ${coinName}${offer.until < (v.until ?? 0n) + offer.period ? `; this offer ends in ${duration(offer.until - m.height)}, and no time past that is owed` : ""}.` : "This offer is closed, so it sells no more time here."}</p>
      ${renewable ? `<div class="row"><div style="width:120px"><input id="more" type="number" min="1" value="7" aria-label="Periods"></div><button class="btn primary" id="renew" ${v.kind !== "owed" ? "disabled" : ""}>Pay for more</button><span class="small" id="renewNote"></span></div>` : ""}</section>` : ""}`;
   // Whether the hosts you ordered from make this chain's blocks, read by CID.
   const makers = hosting.map(([x]) => x).filter((x) => m.terms.get(`${x.host}/${x.id}`)?.blocks);
@@ -1121,7 +1123,7 @@ async function viewOrder(view, key, current) {
         // Priced at the version in force at the height the renewal names.
         const now = offerAt(fresh.versions.get(`${o.host}/${o.id}`), fresh.height);
         if (!now || !isOpen(fresh, now)) throw new Error("This offer has closed: it sells no more time.");
-        if (now.price !== offer.price || now.period !== offer.period) throw new Error(`The offer's terms changed: now ${fmt(now.price)} ${coinName} per ${duration(now.period)}. Reload to pay at them.`);
+        if (pathPrice(now, o.path) !== pathPrice(offer, o.path) || now.period !== offer.period) throw new Error(`The offer's terms changed: now ${fmt(pathPrice(now, o.path))} ${coinName} per ${duration(now.period)}. Reload to pay at them.`);
         const w = renewWrite({ host: o.host, id: o.id, offer: now, payer: me.address, path: o.path, periods, height: fresh.height });
         const { nonce } = await r.account(cfg.market, me.address);
         return recordsBody({ signer: me.address, nonce, chainPath: marketPath, actions: w.actions, payments: w.payments, fee: await fee(cfg.market) });

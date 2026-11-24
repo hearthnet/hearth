@@ -24,7 +24,7 @@ blocks it makes pay its sponsor's key, 1,000 coin a market block.
 You need Node.js 22 or later, on macOS (Apple silicon) or Linux (x86-64):
 
 ```
-npx @hearthnet/hearth sell                  # 10000 Hearth coin a day per chain; --price to choose
+npx @hearthnet/hearth sell                  # 10000 Hearth coin a day per chain on the path; --price to choose
 ```
 
 Hearth runs the node it sells from. The first time, it downloads a pinned
@@ -62,10 +62,17 @@ node at <root>"), stops it before it writes anything. Every verb
 takes `--help`. `--price` takes `<coin>/<blocks>` or `/hour`, `/day`, `/week`;
 `--offer offer.json` still works instead.
 
-**Default price.** 10,000 coin per chain per day. The market pays 1,000
+**The price is per chain on the path.** A host runs every chain from Nexus
+down to the one it sells, so a buyer pays the price for each of them, Nexus
+included: a chain under Nexus (`Nexus/app`) costs twice the price a period,
+one under Nexus/testnet (`Nexus/testnet/app`) three times. Offers written
+before 2.1 charge the price once per chain; a 2.1 seller writes a new
+version of its offer priced per chain on the path.
+
+**Default price.** 10,000 coin per chain on the path per day. The market pays 1,000
 coin a block, a block a minute: 1,440,000 a day, shared by the sellers
 pacing it. With 10 sellers each mints about 144,000 a day, and a full
-default offer (10 chains) earns 100,000 a day, so orders count beside the
+default offer (10 chains under Nexus, 20,000 each) earns 200,000 a day, so orders count beside the
 blocks. `--price` sets another.
 
 **Default limits.** `--price` alone sells chains with blocks at least 30 s
@@ -344,12 +351,13 @@ order's host is credited the amount its key names.
 
 | Key | Written by | Value (read off chain) |
 |---|---|---|
-| `offer/<host>/<id>/<height>` | the host, once per height: each is a version of the offer | price per period, the parent its chains go under, how many chains it sells, the spec limits it takes, the policy modules it runs, when it ends; then `blocks <address>` (where its blocks pay) and, if it runs a public sponsor, `sponsor <https url>` |
+| `offer/<host>/<id>/<height>` | the host, once per height: each is a version of the offer | price per period, the parent its chains go under, how many chains it sells, the spec limits it takes, the policy modules it runs, when it ends; then `blocks <address>` (where its blocks pay), if it runs a public sponsor `sponsor <https url>`, and `whole path` (the price is per chain on the path) |
 | `url/<host>` | the host | its public read URL |
 | `order/<host>/<id>/<payer>/<height>/<paid>/<path>` | anyone, once; pays the host `<paid>` in the same transaction | the chain's payload (spec, premine account, policy modules, genesis transactions), or `renew` to pay for more time |
 
 A chain's paid time is worked out from its orders and renewals: oldest
-first, each adds `floor(paid / price)` periods (at the price and period in
+first, each adds `floor(paid / (price × chains on the path))` periods
+(`floor(paid / price)` for an offer without `whole path`; at the price and period in
 force at the payment's own height) from where paid time ends, or from its
 own height if it had run out.
 
