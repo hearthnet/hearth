@@ -1,25 +1,31 @@
 // What the seller reports each pass and `hearth status` prints once: both
 // keys' balances, its orders and what they paid, the chains it owes, and
 // the storage its sponsor has pinned against its budget (its `/terms`).
-import { judge } from "../client/verdict.mjs";
-import { parseOrderValue } from "../client/records.mjs";
+import { byLanding, judge } from "../client/verdict.mjs";
+import { chainReaders } from "../client/chains.mjs";
+import { parentOf, parseOrderValue } from "../client/records.mjs";
 import { formatBytes } from "./hearth.mjs";
 
 /**
- * This seller's orders on the market read `m`, judged as every reader
- * judges them, with the specs above each ordered path read from the node
- * `n`: `{ mine, verdicts, owed, until, counts, earned }`, `owed` mapping
- * each chain owed now to the genesis its order carries
- * (`{ cid, volumes, modules, proofs }`, as `parseOrderValue` reads it).
+ * This seller's orders on the market `market` read `m`, judged as every
+ * reader judges them, with the specs above each ordered path read as the
+ * web app reads them (`chains`, client/chains.mjs: the node `n`, else the
+ * nodes it lists): `{ mine, verdicts, owed, until, released, counts,
+ * earned }`, `owed` mapping each chain owed now to the genesis the first
+ * owed order there carries (`{ cid, volumes, modules, proofs }`, as
+ * `parseOrderValue` reads it), `released` the Volumes and modules launched
+ * for a chain no longer owed that no chain owed now needs: what to unpin.
  */
-export async function judgeOwn({ sdk, n, m, self }) {
-  const mine = m.orders.filter((o) => o.host === self);
-  const specs = await n.specsAbove([...new Set(mine.map((o) => o.path))]);
-  const verdicts = judge({ sdk, height: m.height, orders: mine, specs });
-  const owed = new Map(), until = new Map();
+export async function judgeOwn({ sdk, n, m, self, market, chains = chainReaders(sdk, n) }) {
+  const mine = m.orders.filter((o) => o.host === self).sort(byLanding);
+  const specs = await chains.specsDownTo([...new Set(mine.map((o) => parentOf(o.path)))].filter(Boolean));
+  const verdicts = judge({ sdk, height: m.height, orders: mine, market, specs });
+  const owed = new Map(), until = new Map(), kept = new Set(), ended = new Set();
   for (const o of mine) {
     const v = verdicts.get(o.key);
-    if (v.kind === "owed" && v.active && !owed.has(o.path)) {
+    if (v.kind !== "owed") continue;
+    for (const cid of v.pins) (v.active ? kept : ended).add(cid);
+    if (v.active && !owed.has(o.path)) {
       const value = parseOrderValue(o.value);
       owed.set(o.path, { cid: value.genesis, volumes: value.volumes, modules: value.modules, proofs: value.proofs });
       until.set(o.path, v.until);
@@ -27,7 +33,7 @@ export async function judgeOwn({ sdk, n, m, self }) {
   }
   const counts = {};
   for (const v of verdicts.values()) counts[v.kind] = (counts[v.kind] ?? 0) + 1;
-  return { mine, verdicts, owed, until, counts, earned: earnings({ self, mine, verdicts }) };
+  return { mine, verdicts, owed, until, released: [...ended].filter((cid) => !kept.has(cid)), counts, earned: earnings({ self, mine, verdicts }) };
 }
 
 /**

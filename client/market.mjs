@@ -76,7 +76,7 @@ export function reader(sdk, node, { fetchImpl = (...a) => fetch(...a), cache } =
   }
 
   return {
-    node, volumes, api, hasChild, tip, block,
+    node, fetch: fetchImpl, volumes, api, hasChild, tip, block,
 
     /**
      * Offers and orders at the tip of the market chain. `offers` maps
@@ -109,14 +109,6 @@ export function reader(sdk, node, { fetchImpl = (...a) => fetch(...a), cache } =
       let t;
       try { t = await tip(chainPath); } catch (e) { if (e.status === 404 || e.status === 400) return undefined; throw e; }
       return (await load(t.block.specCID, t.volume)).node;
-    },
-
-    /** `Map(path → spec)` for every chain above each of `paths`, those this node holds. */
-    async specsAbove(paths) {
-      const above = new Set(paths.flatMap((p) => p.split("/").slice(0, -1).map((_, i, s) => s.slice(0, i + 1).join("/"))));
-      const out = new Map();
-      await Promise.all([...above].map(async (p) => { const spec = await this.spec(p); if (spec) out.set(p, spec); }));
-      return out;
     },
 
     /**

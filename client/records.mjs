@@ -131,40 +131,70 @@ export const formatOrderValue = ({ genesis, volumes, modules = {}, proofs }) => 
 const bytesOf = (base64) => Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
 
 /**
- * The genesis an order carries, checked: `{ cid, block, spec, volumes }`
- * (`volumes` decoded by root CID), or `{ error }`. Each archive must decode
- * to its CID; the block must be a genesis (height 0, no parent) whose spec
- * is in one of the volumes and fits a ChainSpec; the modules exactly the
- * spec's, each matching its CID.
+ * The genesis an order for `path` carries, checked: `{ cid, block, spec,
+ * volumes }` (`volumes` decoded by root CID), or `{ error }`. Each archive
+ * must decode to its CID, and be the genesis's own (reached from its block,
+ * not through the parent's state, or one of the spec's modules); the block
+ * must be a genesis (height 0, no parent) whose children index and spec are
+ * in the volumes, the spec fitting a ChainSpec; the modules exactly the
+ * spec's, each matching its CID; and every proof a child-only proof of this
+ * block at `path`. Never throws on what an order carries.
  */
-export function parseGenesis(sdk, value) {
+export function parseGenesis(sdk, value, path) {
   const volumes = {};
   try {
     for (const [cid, archive] of Object.entries(value.volumes)) volumes[cid] = sdk.decodeVolumeArchive(cid, bytesOf(archive));
   } catch (e) { return { error: `a volume does not match its CID: ${e.message}` }; }
+  const blockBytes = entryBytes(volumes[value.genesis], value.genesis);
   let block;
-  try { block = sdk.decodeCanonicalBlock(entryBytes(volumes[value.genesis], value.genesis)); } catch (e) { return { error: `the genesis is not a block: ${e.message}` }; }
+  try { block = sdk.decodeCanonicalBlock(blockBytes); } catch (e) { return { error: `the genesis is not a block: ${e.message}` }; }
   if (block.height !== 0n || block.parentCID !== undefined) return { error: "the block is not a genesis" };
-  const spec = specIn(sdk, volumes, block.specCID);
-  if (!spec) return { error: "the genesis's spec is not in its volumes" };
-  for (const [name, max] of Object.entries(SPEC_FIELDS)) if (!inRange(BigInt(spec[name] ?? -1), max)) return { error: `spec ${name} is out of range` };
-  if (BigInt(spec.targetBlockTime) === 0n) return { error: "spec targetBlockTime is zero" };
-  const named = [...new Set((spec.wasmPolicies ?? []).map((p) => p.moduleCID))];
+  const entries = new Map(Object.values(volumes).flatMap((v) => v.entries.map((e) => [e.cid, e.bytes])));
+  if (!entries.has(block.childrenCID)) return { error: "the genesis's children index is not in its volumes" };
+  const spec = specIn(sdk, entries, block.specCID);
+  if (!isObject(spec)) return { error: "the genesis's spec is not in its volumes" };
+  for (const [name, max] of Object.entries(SPEC_FIELDS)) if (!inRange(integer(spec[name]), max)) return { error: `spec ${name} is out of range` };
+  for (const name of ["targetBlockTime", "maxBlockSize", "maxStateGrowth"]) if (integer(spec[name]) === 0n) return { error: `spec ${name} is zero` };
+  const policies = spec.wasmPolicies ?? [];
+  if (!Array.isArray(policies) || !policies.every((p) => isObject(p) && typeof p.moduleCID === "string")) return { error: "spec wasmPolicies is not a list of policies" };
+  const named = [...new Set(policies.map((p) => p.moduleCID))];
   if (Object.keys(value.modules).sort().join() !== named.sort().join()) return { error: "the modules are not exactly the spec's" };
   for (const [cid, base64] of Object.entries(value.modules)) if (moduleCID(sdk, base64) !== cid) return { error: `module ${cid} does not match its CID` };
+  const own = reachable(sdk, entries, value.genesis, block.parentStateCID);
+  const extra = Object.keys(volumes).find((cid) => !own.has(cid) && !named.includes(cid));
+  if (extra) return { error: `volume ${extra} is not the genesis's own` };
+  for (const proof of value.proofs) {
+    const decoded = sdk.decodeChildBlockProof(bytesOf(proof));
+    if (!decoded || !sdk.verifyChildBlockProof(decoded, blockBytes, path.split("/")).ok) return { error: `a proof does not prove this genesis at ${path}` };
+  }
   return { cid: value.genesis, block, spec, volumes };
 }
 
 /** The bytes of entry `cid` in a decoded volume (`{ rootCID, entries }`), or undefined. */
 const entryBytes = (volume, cid) => volume?.entries.find((e) => e.cid === cid)?.bytes;
 
-/** The spec `cid` names, decoded from whichever volume holds it, or undefined. */
-function specIn(sdk, volumes, cid) {
-  for (const volume of Object.values(volumes)) {
-    const bytes = entryBytes(volume, cid);
-    if (bytes) try { return sdk.decodeDagCbor(bytes); } catch { return undefined; }
+/** The spec `cid` names, decoded from `entries` (CID → bytes), or undefined. */
+function specIn(sdk, entries, cid) {
+  try { return entries.has(cid) ? sdk.decodeDagCbor(entries.get(cid)) : undefined; } catch { return undefined; }
+}
+
+/** Every CID linked from `root` through `entries` (CID → bytes), `root` included, never through `skip`. */
+function reachable(sdk, entries, root, skip) {
+  const seen = new Set([root]), queue = [root];
+  const links = (node, out) => {
+    if (Array.isArray(node)) for (const x of node) links(x, out);
+    else if (isObject(node) && !(node instanceof Uint8Array)) {
+      if (typeof node.rawCID === "string") out.push(node.rawCID);
+      else for (const x of Object.values(node)) links(x, out);
+    }
+    return out;
+  };
+  while (queue.length) {
+    let node;
+    try { node = sdk.decodeDagCbor(entries.get(queue.pop())); } catch { continue; }
+    for (const cid of links(node, [])) if (cid !== skip && !seen.has(cid)) { seen.add(cid); queue.push(cid); }
   }
-  return undefined;
+  return seen;
 }
 
 // ---- payloads ----
@@ -242,6 +272,8 @@ const SPEC_FIELDS = {
 const keys = (object) => Object.keys(object).sort().join(",");
 const isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
 const inRange = (v, max) => typeof v === "bigint" && v >= 0n && v <= max;
+/** A decoded integer as a BigInt, or undefined. */
+const integer = (v) => (typeof v === "bigint" ? v : Number.isSafeInteger(v) ? BigInt(v) : undefined);
 
 /** The CID of a policy module, from its base64 bytes, as Lattice names it. */
 export const moduleCID = (sdk, base64) => sdk.cidV1DagCbor(sdk.encodeDagCbor({ bytes: base64 }));

@@ -22,18 +22,16 @@ test("a spec rounds the premine up to whole block rewards and names each module 
   assert.deepEqual(spec.wasmPolicies, [{ moduleCID: CID, abiVersion: 1, scope: "transaction", entrypoint: "lattice_validate_transaction" }]);
 });
 
-test("the order carries the minted genesis, which checks out against its CIDs, spec and modules", () => {
-  // The builder with the proofs it is to return (the genesis's child-only proof).
-  const withProofs = (input) => ({ ...buildChildGenesis(input), proofs: ["AAAA"] });
-  const { cid, value } = mint(withProofs);
+test("the order carries the minted genesis, which checks out against its CIDs, spec, modules and proof", () => {
+  const { cid, value } = mint(buildChildGenesis);
   const parsed = parseOrderValue(value);
   assert.equal(parsed.error, undefined);
-  assert.deepEqual(parsed.proofs, ["AAAA"]);
-  const g = parseGenesis(sdk, parsed);
+  assert.equal(parsed.proofs.length, 1, "the genesis's child-only proof");
+  const g = parseGenesis(sdk, parsed, "Nexus/testnet/my-app");
   assert.equal(g.error, undefined);
   assert.equal(g.cid, cid);
   assert.equal(BigInt(g.spec.maxBlockSize), 20000n);
-  assert.equal(mint(withProofs).cid, cid, "the same inputs make the same genesis");
+  assert.equal(mint(buildChildGenesis).cid, cid, "the same inputs make the same genesis");
 });
 
 test("without a proof of the genesis's work, minting fails before anything is paid", () => {

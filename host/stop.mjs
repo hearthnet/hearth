@@ -37,7 +37,7 @@ export async function stop({ sdk, node, fetchImpl, rpc, privateKey, market, fee,
       landed = !mine().length;
     }
   }
-  const { until: paid } = await judgeOwn({ sdk, n: r, m, self });
+  const { until: paid } = await judgeOwn({ sdk, n: r, m, self, market });
 
   // The fragment keeps only the market and the chains with paid time (with
   // the chains above them); with none, or `--now`, it goes. A running

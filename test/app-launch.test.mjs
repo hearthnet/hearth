@@ -6,9 +6,10 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import * as sdk from "../vendor/lattice-sdk.js";
 import { context, validate } from "../policy/test/host.mjs";
-import { launchAttempt, launchBody, launchCheck } from "../app/launch.mjs";
+import { chosenTerms, launchAttempt, launchBody, launchCheck } from "../app/launch.mjs";
 import { formatOffer, formatOrderValue, parseOrderKey, pathPrice } from "../client/records.mjs";
 import { judge } from "../client/verdict.mjs";
+import { SIZES, mint } from "./minted.mjs";
 
 const market = new WebAssembly.Module(readFileSync(new URL("../chain/policy-v3.wasm", import.meta.url)));
 const PATH = ["Nexus", "testnet", "hearth"];
@@ -86,16 +87,24 @@ test("a payment landing between an attempt's reads is never paid again with a fr
 });
 
 test("a launch that lands is owed from that block for the periods it paid", () => {
-  const fixture = JSON.parse(readFileSync(new URL("./fixtures/genesis-testnet-hearth.json", import.meta.url), "utf8"));
-  const module = readFileSync(new URL("../chain/policy-v3.wasm", import.meta.url)).toString("base64");
-  const value = formatOrderValue({ genesis: fixture.genesis, volumes: fixture.volumes, modules: { bafyreidjwv6eawkoknszzpbbw5zurltzhrhpzdkj4g4hsdidj76a6sqfdi: module }, proofs: ["AAAA"] });
-  // The fixture's own spec prices the new chain; the two above it use SPEC.
-  const genesisSpec = { maxBlockSize: 1000000, targetBlockTime: 60000, maxStateGrowth: 1000000 };
+  const { value } = mint(APP);
+  // The minted genesis's own spec prices the new chain; the two above it use SPEC.
   const t = terms(10n);
-  const { keys } = launchBody({ chosen: [{ host: HOST_A, id: "a1", terms: t }], payer: BUYER, nonce: 4n, path: APP, value, specs: [SPEC, SPEC, genesisSpec], periods: 3n, chainPath: PATH, fee: 1n });
+  const { keys } = launchBody({ chosen: [{ host: HOST_A, id: "a1", terms: t }], payer: BUYER, nonce: 4n, path: APP, value, specs: [SPEC, SPEC, SIZES], periods: 3n, chainPath: PATH, fee: 1n });
   const order = { key: keys[0], ...parseOrderKey(keys[0]), value, landed: 50n, terms: t };
-  const [verdict] = judge({ sdk, height: 60n, orders: [order], specs: new Map([["Nexus", SPEC], ["Nexus/testnet", SPEC]]) }).values();
+  const [verdict] = judge({ sdk, height: 60n, orders: [order], market: PATH.join("/"), specs: new Map([["Nexus", SPEC], ["Nexus/testnet", SPEC]]) }).values();
   assert.equal(verdict.kind, "owed");
   assert.equal(verdict.from, 50n);
   assert.equal(verdict.until, 50n + 3n * 1440n);
+});
+
+test("a launch signs exactly the offer text the buyer was shown, or stops", () => {
+  const shownText = terms(10n), k = `${HOST_A}/a1`;
+  const offers = [{ k, host: HOST_A, id: "a1" }];
+  const shown = new Map([[k, shownText]]);
+  assert.deepEqual(chosenTerms({ offers, shown, now: new Map([[k, shownText]]) }), [{ host: HOST_A, id: "a1", terms: shownText }]);
+  // The same period and price, another hash rate or reward address: still new terms.
+  const other = formatOffer({ hashrate: 999n, throughput: 10n, storage: 1n, period: 1440n, blocks: HOST_B });
+  assert.throws(() => chosenTerms({ offers, shown, now: new Map([[k, other]]) }), /has new terms/);
+  assert.throws(() => chosenTerms({ offers, shown, now: new Map() }), /has closed/);
 });

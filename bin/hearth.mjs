@@ -313,7 +313,7 @@ if (verb === "status") {
     }
     const n = reader(sdk, node, { fetchImpl });
     const m = await n.market(a.market);
-    const own = await judgeOwn({ sdk, n, m, self });
+    const own = await judgeOwn({ sdk, n, m, self, market: a.market });
     const [seller, sponsor] = await Promise.all([n.account(a.market, self), n.account(a.market, sponsorAddress)]);
     console.log(report({ market: a.market, height: m.height, seller: { address: self, balance: seller.balance }, sponsor: { address: sponsorAddress, balance: sponsor.balance },
       ...own, storage: root ? await sponsorStorage(a["sponsor-port"] ?? "8650") : REMOTE_STORAGE }).join("\n"));

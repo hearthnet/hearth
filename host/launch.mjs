@@ -38,3 +38,15 @@ export async function launch({ rpc, path, genesis }) {
   });
   return body.status;
 }
+
+/**
+ * Unpins each of `released` (as `judgeOwn` lists them) that the node still
+ * pins (`GET /pins`, then `DELETE /pins/<cid>`). Returns those it unpinned.
+ */
+export async function unpin({ rpc, released }) {
+  if (!released.length) return [];
+  const { body } = await rpc("/pins");
+  const gone = released.filter((cid) => (body.pins ?? []).includes(cid));
+  for (const cid of gone) await rpc(`/pins/${cid}`, undefined, "DELETE");
+  return gone;
+}

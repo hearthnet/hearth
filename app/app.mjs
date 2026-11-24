@@ -11,11 +11,12 @@
 import * as sdk from "../vendor/lattice-sdk.js";
 import { loadGenesis } from "../vendor/lattice-genesis.js";
 import { reader } from "../client/market.mjs";
+import { chainReaders, declaredNodes } from "../client/chains.mjs";
 import { judge } from "../client/verdict.mjs";
 import { RENEW, parseOffer, parseOrderKey, moduleCID, isAddress, burnAddress, pathFromNexus, pathPrice } from "../client/records.mjs";
 import { snippet } from "./snippet.mjs";
 import { uniqueNodes, nodesNow, chooseAnchor, disagreeMessage, blocksTime, CHECKPOINT_AFTER, WALK } from "./anchor.mjs";
-import { launchAttempt } from "./launch.mjs";
+import { chosenTerms, launchAttempt } from "./launch.mjs";
 import { chainSpec, mintGenesis, BLOCK_REWARD } from "./genesis.mjs";
 import { once } from "./once.mjs";
 import { creditedHashrate, formatRate } from "../client/mining.mjs";
@@ -54,9 +55,7 @@ const directory = marketPath.at(-1);
 const coinName = "Hearth coin", parentCoin = `${marketPath.at(-2)} coin`;
 
 /** Nodes for `chainPath` the entry's network declares (`/api/chain/endpoints`, through the SDK's resolver): `[{ url, declaresSubmit }]`. */
-async function declared(chainPath) {
-  try { return await new sdk.EndpointResolver(new sdk.NodeClient(cfg.entry, ["Nexus"])).resolve(chainPath.split("/"), AbortSignal.timeout(10_000)); } catch { return []; }
-}
+const declared = (chainPath) => declaredNodes(sdk, cfg.entry, chainPath);
 /**
  * A node serving the market, found through Lattice: of the nodes the entry
  * lists for it, all probed at once, each with a timeout, the fastest that
@@ -77,24 +76,11 @@ if (!cfg.node) cfg.node = await findNode();
 const r = reader(sdk, cfg.node);
 
 /**
- * A reader of `chainPath` (a chain above an ordered one, which the market's
- * node may not host): the app's node when it serves the chain, else the
- * fastest node the entry lists for it.
+ * Readers of the chains above an ordered one, which the market's node may
+ * not host (client/chains.mjs): the app's node when it serves the chain,
+ * else the fastest node the entry lists for it; specs kept once read.
  */
-const readers = new Map();
-async function readerOf(chainPath) {
-  if (readers.has(chainPath)) return readers.get(chainPath);
-  const path = chainPath.split("/");
-  let found;
-  try { await r.api("/api/chain/info", chainPath); found = r; } catch {}
-  if (!found) {
-    const hosts = await declared(chainPath);
-    try { found = reader(sdk, await Promise.any(hosts.map(async ({ url }) => { await new sdk.NodeClient(url, path).chainInfo(AbortSignal.timeout(5_000)); return url; }))); }
-    catch { throw new Error(`No node found that serves ${chainPath}. Try again, or give ?node= a node that serves it and the market.`); }
-  }
-  readers.set(chainPath, found);
-  return found;
-}
+const { readerOf, specsDownTo } = chainReaders(sdk, r, { entry: cfg.entry });
 
 /**
  * The nodes serving `chainPath` from `genesis`, those taking transactions
@@ -109,23 +95,6 @@ const nodesFor = (chainPath, genesis) => nodesOnce(`${chainPath} ${genesis}`, as
     .then((info) => (info.genesisHash === genesis ? url : null), () => null)));
   return serving.filter(Boolean);
 });
-
-/** A chain's spec, read from its tip by CID (the app's node, else one the entry lists); kept once read. */
-const specs = new Map();
-function specOf(chainPath) {
-  if (!specs.has(chainPath)) {
-    const read = (async () => (await r.spec(chainPath)) ?? (await (await readerOf(chainPath)).spec(chainPath)))();
-    specs.set(chainPath, read);
-    read.then((s) => { if (!s) specs.delete(chainPath); }, () => specs.delete(chainPath));
-  }
-  return specs.get(chainPath).catch(() => undefined);
-}
-/** `Map(path → spec)` of every chain from Nexus down to each of `paths`, those that could be read. */
-async function specsDownTo(paths) {
-  const all = [...new Set(paths.flatMap(pathFromNexus))];
-  const read = await Promise.all(all.map(specOf));
-  return new Map(all.map((p, i) => [p, read[i]]).filter(([, s]) => s));
-}
 
 // ---- small helpers ----
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -198,7 +167,7 @@ async function loadMarket(force = false) {
     m.terms = new Map([...m.offers].map(([k, t]) => [k, parseOffer(t)]).filter(([, o]) => o));
     // Orders are priced over every chain on their path: the specs above each.
     m.specs = await specsDownTo(m.orders.map((o) => o.path.split("/").slice(0, -1).join("/")).filter(Boolean));
-    verdicts = judge({ sdk, height: m.height, orders: m.orders, specs: m.specs });
+    verdicts = judge({ sdk, height: m.height, orders: m.orders, market: cfg.market, specs: m.specs });
     market = m;
     return m;
   })().finally(() => { loading = null; });
@@ -557,14 +526,12 @@ async function viewLaunch(view, _, current) {
       const tip = await parent.tip(now.parent);
       const { value } = mintGenesis(buildChildGenesis, { spec, path, premineTo: me.address, modules: mods, parentStateCID: tip.block.postStateCID });
       button.textContent = offers.length > 1 ? "Paying the hosts…" : "Paying the host…";
-      const chosenTerms = offers.map((x) => ({ host: x.host, id: x.id, terms: fresh.offers.get(x.k) }));
-      for (const [i, c] of chosenTerms.entries()) if (c.terms === undefined || parseOffer(c.terms)?.period !== offers[i].offer.period || pathPrice(parseOffer(c.terms), pathSpecs) !== offers[i].price) {
-        throw new Error(`The offer at ${hostName(c.host)} ${c.terms === undefined ? "has closed" : "has new terms"} since you chose it. Check your hosts and launch again.`);
-      }
+      // Each offer exactly as the buyer was shown it (`m`, this page's read), and as it stands now.
+      const picked = chosenTerms({ offers, shown: m.offers, now: fresh.offers, name: hostName });
       let keys;
       // One transaction pays every host (app/launch.mjs).
       await send(async () => {
-        const launched = await launchAttempt({ reader: r, market: cfg.market, chosen: chosenTerms, payer: me.address, path, value, specs: pathSpecs, periods, chainPath: marketPath, fee: () => fee(cfg.market), name: hostName });
+        const launched = await launchAttempt({ reader: r, market: cfg.market, chosen: picked, payer: me.address, path, value, specs: pathSpecs, periods, chainPath: marketPath, fee: () => fee(cfg.market), name: hostName });
         keys = launched.keys;
         return launched.body;
       });

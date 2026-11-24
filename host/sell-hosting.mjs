@@ -34,9 +34,13 @@
 // `PUT /config/fragments/hostmarket`, sent with the version it read
 // (`If-Match`, or `If-None-Match: *` when there was none). A chain whose paid
 // time ran out is left out, and the node stops it unless another layer lists
-// it; what it stored stays. Each owed chain it has not launched in this
-// process it then launches from the genesis its order carries
-// (host/launch.mjs), every pass until the node weighs the genesis.
+// it; what it stored stays, but the pins launching it made go (`DELETE
+// /pins/<cid>`, each Volume and module no chain owed now needs). Each owed
+// chain it has not launched in this process it then launches from the
+// genesis its order carries (host/launch.mjs), every pass until the node
+// weighs the genesis. The specs above each ordered path come from its node,
+// else from the nodes its node lists for the chain, as the web app reads
+// them (client/chains.mjs).
 //
 // Each pass prints both keys' balances, its orders, what they paid and what
 // it owes, and the storage its sponsor pinned against --storage-budget, as
@@ -72,12 +76,13 @@ import { parseArgs } from "node:util";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const sdk = await import(join(HERE, "../vendor/lattice-sdk.js"));
 const { reader } = await import(join(HERE, "../client/market.mjs"));
+const { chainReaders } = await import(join(HERE, "../client/chains.mjs"));
 const { formatOffer, isHTTPS, parseOffer } = await import(join(HERE, "../client/records.mjs"));
 const { offerWrite, recordsBody, submit, keyFileJSON } = await import(join(HERE, "../client/tx.mjs"));
 const { ordered, sellerChains, fundingMessage, fundingStep, burn, burnChain, parseAmount, rpcPort, nodeSecret, authedFetch,
   nodeVersion, chainSync, ensureKey, operatorRPC, sellerFiles, startsReopened, parseSize, offerTerms, DEFAULT_STORAGE_RATE, DEFAULT_STORAGE_BUDGET } = await import(join(HERE, "hearth.mjs"));
 const { judgeOwn, report, REMOTE_STORAGE } = await import(join(HERE, "status.mjs"));
-const { launch } = await import(join(HERE, "launch.mjs"));
+const { launch, unpin } = await import(join(HERE, "launch.mjs"));
 const { miner } = await import(join(HERE, "pace.mjs"));
 const { sponsorAnswers, sponsorArgs, sponsorBinary, sponsorStorage, supervise } = await import(join(HERE, "sponsor.mjs"));
 
@@ -136,6 +141,10 @@ const authed = authedFetch(() => nodeSecret({ root, tokenFile: args.node && args
 const node = () => reader(sdk, rpcURL(), { fetchImpl: authed });
 
 const rpc = operatorRPC(rpcURL, authed);
+
+/** Spec reads, kept while the node's URL stays the same (client/chains.mjs). */
+let chains;
+const chainsOf = (n) => (chains?.url === n.node ? chains : (chains = { url: n.node, ...chainReaders(sdk, n) }));
 
 // ---- the seller's fragment of the node's configuration ----
 
@@ -306,8 +315,13 @@ async function pass() {
     ready = open.length > 0 || await fund(true);
     if (ready) startSponsor();
   }
-  const judged = await judgeOwn({ sdk, n, m, self });
+  const judged = await judgeOwn({ sdk, n, m, self, market: marketPath, chains: chainsOf(n) });
   const { owed } = judged;
+  // What launching a chain no longer owed pinned, and no owed chain needs.
+  try { for (const cid of await unpin({ rpc, released: judged.released })) log("unpinned", cid, "(no chain owed now needs it)"); }
+  catch (e) { log("could not unpin what ended chains pinned (will retry)", e.message); }
+  // A chain owed again later is launched again: its pins went.
+  for (const path of launched) if (!owed.has(path)) launched.delete(path);
   const [sellerAccount, sponsorAccount] = await Promise.all([n.account(marketPath, self), n.account(marketPath, sponsorAddress)]);
   log(report({ market: marketPath, height: m.height, seller: { address: self, balance: sellerAccount.balance }, sponsor: { address: sponsorAddress, balance: sponsorAccount.balance },
     ...judged, storage: root ? await sponsorStorage(args["sponsor-port"]) : REMOTE_STORAGE }).join("\n  "));

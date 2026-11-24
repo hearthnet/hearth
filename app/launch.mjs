@@ -4,6 +4,22 @@ import { orderWrite, recordsBody } from "../client/tx.mjs";
 import { RENEW, parseOffer } from "../client/records.mjs";
 
 /**
+ * The offers the buyer chose (`[{ k, host, id }]`, `k` `<host>/<id>`), each
+ * with the text the buyer was shown (`shown`, `<host>/<id>` → text): what
+ * the order asserts. Throws when an offer's text in `now` is not exactly
+ * that, so a buyer never pays terms it was not shown.
+ */
+export function chosenTerms({ offers, shown, now, name = (host) => host }) {
+  return offers.map(({ k, host, id }) => {
+    const terms = shown.get(k);
+    if (now.get(k) === undefined || now.get(k) !== terms) {
+      throw new Error(`The offer at ${name(host)} ${now.get(k) === undefined ? "has closed" : "has new terms"} since you chose it. Check your hosts and launch again.`);
+    }
+    return { host, id, terms };
+  });
+}
+
+/**
  * Throws when a chosen offer (`[{ host, id, terms }]`, `terms` its text as
  * the buyer saw it) is gone or has other terms in `offers` (`<host>/<id>` →
  * text now), or when `payer` already has an order for `path` at one of these
