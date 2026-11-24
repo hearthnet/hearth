@@ -67,7 +67,10 @@ down to the one it sells, so a buyer pays the price for each of them, Nexus
 included: a chain under Nexus (`Nexus/app`) costs twice the price a period,
 one under Nexus/testnet (`Nexus/testnet/app`) three times. Offers written
 before 2.1 charge the price once per chain; a 2.1 seller writes a new
-version of its offer priced per chain on the path.
+version of its offer priced per chain on the path. Hearth 2.0 cannot read
+that line: it sees no offer while such a version is in force, so it misses
+renewals paid under it and calls orders placed under it void. Read the
+market with 2.1 or later.
 
 **Default price.** 10,000 coin per chain on the path per day. The market pays 1,000
 coin a block, a block a minute: 1,440,000 a day, shared by the sellers

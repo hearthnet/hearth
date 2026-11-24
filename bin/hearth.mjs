@@ -440,7 +440,7 @@ try {
     // a new one (and the seller says the old offer stays on sale).
     offerPath = join(dirname(key), `${offer.id}.json`);
     if (!existsSync(offerPath)) writeFileSync(offerPath, `${JSON.stringify(offer, null, 2)}\n`);
-    console.log(`offer ${offer.id}: ${offer.price} coin per ${offer.period}, ${offer.capacity} chains under ${offer.parent}${a.url ? `, at ${a.url}` : ", key only (no --url)"}`);
+    console.log(`offer ${offer.id}: ${offer.price} coin per chain on the path per ${offer.period}, ${offer.capacity} chains under ${offer.parent}${a.url ? `, at ${a.url}` : ", key only (no --url)"}`);
   }
   if (a.burn) {
     console.log(`burns until ${a.burn} is burned for ${address} on ${burnChain(a["burn-chain"] ?? a.market, a.market)}, once`);
