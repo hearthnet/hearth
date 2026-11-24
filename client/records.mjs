@@ -379,7 +379,7 @@ export function parseHostURL(value) {
 }
 
 /** A sponsor named by its path on the host's own origin: `/` and no `//`, query, fragment or space. */
-const isSponsorPath = (s) => /^\/(?!\/)[^\s?#]*$/.test(s);
+const isSponsorPath = (s) => /^\/(?!\/)[^\s?#\\]*$/.test(s);
 
 /**
  * An offer's sponsor as a URL: an https URL as it is; a path on the origin
@@ -388,7 +388,9 @@ const isSponsorPath = (s) => /^\/(?!\/)[^\s?#]*$/.test(s);
 export function sponsorAt(sponsor, urlValue) {
   if (sponsor === undefined || !isSponsorPath(sponsor)) return sponsor;
   const read = parseHostURL(urlValue)?.read;
-  return read && new URL(sponsor, new URL(read).origin).href;
+  if (!read) return undefined;
+  const { origin } = new URL(read), url = new URL(sponsor, origin);
+  return url.origin === origin ? url.href : undefined;
 }
 
 /** A url record's value for a read URL and, if given, where its proof is. */

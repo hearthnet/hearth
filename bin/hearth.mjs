@@ -137,18 +137,21 @@ async function nodeRoot({ create = false, install = false } = {}) {
   const root = managedRoot(home);
   if (!create && !existsSync(join(root, "hearth/seller.json"))) fail("nothing is sold from this machine yet: run hearth sell (or give --root, or --node with --token-file)");
   a.lattice ??= (await tools()).lattice;
-  // The node Hearth runs is reachable by default: with no URL of the seller's own, a tunnel.
-  if (create) a.public ??= !a["key-only"] && !a.url && !a.proof && !a["sponsor-url"];
-  if (create && a.public) {
-    // Read by anyone through the tunnel, and taking their writes: set before the node starts.
+  if (create) {
+    // Public (read by anyone through the tunnel, taking their writes) or not, set before the node starts.
     initManagedNode({ home, lattice: a.lattice });
-    execFileSync(a.lattice, ["config", "set", `publicRead=${PUBLIC_READ_PORT}`, "publicSubmit=true", "--root", root], { stdio: "ignore" });
+    a.public ??= defaultPublic();
+    execFileSync(a.lattice, a.public ? ["config", "set", `publicRead=${PUBLIC_READ_PORT}`, "publicSubmit=true", "--root", root]
+      : ["config", "unset", "publicRead", "publicSubmit", "--root", root], { stdio: "ignore" });
   }
   if (install) return initManagedNode({ home, lattice: a.lattice });
   // The seller keeps its node up; another verb runs it for as long as it takes.
   if (create) return (await keepManagedNode({ home, lattice: a.lattice })).root;
   return (await runManagedNode({ home, lattice: a.lattice })).root;
 }
+
+/** Hearth's own node is reachable by default: with no URL of the seller's own (nor --key-only), a tunnel. */
+const defaultPublic = () => !a["key-only"] && !a.url && !a.proof && !a["sponsor-url"];
 
 /** The node's public read port at `root` (`lattice config get publicRead`), or a failure saying how to set it. */
 function publicReadPort(root) {
@@ -363,7 +366,10 @@ if (verb === "stop") {
         // Hearth's node stops with the seller that ran it: this verb runs it now.
         if (node) {
           // Gone, or a zombie (an init that reaps no orphans leaves one).
-          const alive = () => { try { return !execFileSync("ps", ["-o", "stat=", "-p", String(node)], { encoding: "utf8" }).trim().startsWith("Z"); } catch { return false; } };
+          const alive = () => {
+            try { process.kill(node, 0); } catch { return false; }
+            try { return !execFileSync("ps", ["-o", "stat=", "-p", String(node)], { encoding: "utf8" }).trim().startsWith("Z"); } catch { return true; }
+          };
           for (let i = 0; i < 1200 && alive(); i++) await new Promise((r) => setTimeout(r, 250));
           await runManagedNode({ home: homedir(), lattice: a.lattice });
         }
@@ -450,6 +456,7 @@ try {
   console.log(`${created ? "made the seller's key" : "seller key"} ${key}\naddress ${address}`);
   if (created) console.log(WHY_SELL);
 
+  if (root === managedRoot(homedir())) a.public ??= defaultPublic();
   let tunnel;
   if (a.public && !a.install) {
     const readPort = publicReadPort(root);
@@ -483,6 +490,7 @@ try {
   const sellArgs = [...where, "--market", a.market, "--key", key, "--offer", offerPath,
     ...pass("url"), ...pass("proof"), ...pass("fee"), ...pass("burn"), ...pass("burn-chain"), ...(a["storage-offer"] ? ["--storage-offer", resolve(a["storage-offer"])] : []),
     ...sponsorBin, ...pass("sponsor-port"), ...pass("sponsor-url"), ...pass("storage-rate"), ...pass("storage-budget"),
+    ...(a.public ? ["--sponsor-loopback"] : []), ...(a["key-only"] ? ["--key-only"] : []),
     "--interval", a.interval, ...(a.once ? ["--once"] : []), ...(a.resume ? ["--resume"] : [])];
 
   if (a.install) {
@@ -497,7 +505,7 @@ try {
     const program = self.includes("/_npx/") ? [join(bin, "npx"), "--yes", `${name}@${version}`] : [nodePath, self];
     const lattice = a.lattice.includes("/") ? resolve(a.lattice) : onPath(a.lattice) ?? a.lattice;
     // A service restart is not the operator: it never reopens a closed offer.
-    const command = [...program, "sell", ...sellArgs, ...(a.resume ? [] : ["--resume"]), ...(a["key-only"] ? ["--key-only"] : []), "--lattice", lattice];
+    const command = [...program, "sell", ...sellArgs, ...(a.resume ? [] : ["--resume"]), ...(a.public ? ["--public"] : a["key-only"] ? ["--key-only"] : []), "--lattice", lattice];
     const sponsorDir = a["sponsor-bin"]?.includes("/") ? [dirname(resolve(a["sponsor-bin"]))] : [];
     const path = [...new Set([bin, ...(lattice.startsWith("/") ? [dirname(lattice)] : []), ...sponsorDir, "/usr/local/bin", "/usr/bin", "/bin"])].join(delimiter);
     const { units, load, note } = serviceUnits({ platform: process.platform, home: homedir(), command, nodeCommand: root && [lattice, "up", "--root", root], path });
@@ -518,9 +526,10 @@ try {
 
   const child = spawn(process.execPath, [join(HERE, "../host/sell-hosting.mjs"), ...sellArgs, "--lattice", a.lattice], { stdio: "inherit" });
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => child.kill(signal));
-  child.on("exit", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
-  // Buyers reach the chains only through the tunnel: without it, stop (a service starts it all again).
-  tunnel?.child.on("exit", (code) => { console.error(`hearth: the tunnel stopped (cloudflared exited ${code}): stopping the seller`); child.kill("SIGTERM"); process.exitCode = 1; });
+  // Buyers reach the chains only through the tunnel: without it, stop, failed (a service starts it all again).
+  let tunnelGone = false;
+  child.on("exit", (code, signal) => process.exit(tunnelGone ? 1 : code ?? (signal ? 1 : 0)));
+  tunnel?.child.on("exit", (code) => { tunnelGone = true; console.error(`hearth: the tunnel stopped (cloudflared exited ${code}): stopping the seller`); child.kill("SIGTERM"); });
 } catch (e) {
   fail(e.message);
 }

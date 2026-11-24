@@ -6,6 +6,9 @@
 import { spawn } from "node:child_process";
 import { createServer, request } from "node:http";
 
+// Hop-by-hop headers (RFC 9110 §7.6.1): about one connection, never forwarded.
+const HOP = new Set(["connection", "keep-alive", "te", "trailer", "transfer-encoding", "upgrade"]);
+
 /** The node's public read port Hearth sets on its own node. */
 export const PUBLIC_READ_PORT = 8082;
 
@@ -25,12 +28,20 @@ export function startProxy({ port = 0, nodePort, sponsorPort, seller }) {
     }
     const sponsor = path === "/sponsor" || path.startsWith("/sponsor/") || path.startsWith("/sponsor?");
     const to = sponsor ? sponsorPort : nodePort;
-    const forwarded = request({ host: "127.0.0.1", port: to, method: req.method, path: sponsor ? path.slice("/sponsor".length) || "/" : path,
-      headers: { ...req.headers, host: `127.0.0.1:${to}` } }, (answer) => {
-      res.writeHead(answer.statusCode ?? 502, answer.headers);
+    const rest = sponsor ? path.slice("/sponsor".length) : path;
+    // End to end headers only, and none a client could use to pose as another address.
+    const headers = Object.fromEntries(Object.entries(req.headers).filter(([k]) => !HOP.has(k) && !k.startsWith("proxy-") && !k.startsWith("x-forwarded-") && k !== "forwarded" && k !== "x-real-ip"));
+    const forwarded = request({ host: "127.0.0.1", port: to, method: req.method, path: rest.startsWith("/") ? rest : `/${rest}`,
+      headers: { ...headers, host: `127.0.0.1:${to}` } }, (answer) => {
+      res.writeHead(answer.statusCode ?? 502, Object.fromEntries(Object.entries(answer.headers).filter(([k]) => !HOP.has(k))));
       answer.pipe(res);
+      answer.on("error", () => res.destroy());
     });
-    forwarded.on("error", () => { if (!res.headersSent) res.writeHead(502, { "Content-Type": "text/plain" }); res.end(sponsor ? "the sponsor does not answer" : "the node does not answer"); });
+    forwarded.on("error", () => {
+      if (res.headersSent) return res.destroy();   // cut short: never a body with an error tacked on
+      res.writeHead(502, { "Content-Type": "text/plain" });
+      res.end(sponsor ? "the sponsor does not answer" : "the node does not answer");
+    });
     req.pipe(forwarded);
   });
   return new Promise((ok, fail) => {

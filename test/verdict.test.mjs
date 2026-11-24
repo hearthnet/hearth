@@ -285,7 +285,7 @@ test("an offer's sponsor by its path is on the host's url record's origin, as th
   const text = (sponsor) => version({ sponsor });
   assert.equal(parseOffer(text("/sponsor")).sponsor, "/sponsor");
   assert.equal(parseOffer(text("https://host.example/sponsor")).sponsor, "https://host.example/sponsor");
-  for (const bad of ["//evil.example/sponsor", "sponsor", "/sponsor?x=1", "/spon sor", "http://host.example/sponsor"]) assert.equal(parseOffer(text(bad)), undefined, bad);
+  for (const bad of ["//evil.example/sponsor", "/\\evil.example/sponsor", "sponsor", "/sponsor?x=1", "/spon sor", "http://host.example/sponsor"]) assert.equal(parseOffer(text(bad)), undefined, bad);
   assert.equal(sponsorAt("/sponsor", "https://a-b.trycloudflare.com"), "https://a-b.trycloudflare.com/sponsor");
   assert.equal(sponsorAt("/sponsor", "https://host.example/read/\nproof https://host.example/.well-known/lattice.json"), "https://host.example/sponsor", "the origin, not the read path");
   assert.equal(sponsorAt("/sponsor", undefined), undefined, "no url record: no sponsor");

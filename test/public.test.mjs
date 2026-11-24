@@ -27,7 +27,22 @@ test("the proxy: the proof lists the seller, /sponsor goes to the sponsor withou
     assert.deepEqual(await (await at("/sponsor/work", { method: "POST", body: "{\"a\":1}" })).json(), { name: "sponsor", method: "POST", url: "/work", body: "{\"a\":1}" });
     assert.equal((await (await at("/api/chain/info?chainPath=Nexus")).json()).url, "/api/chain/info?chainPath=Nexus");
     assert.equal((await at("/sponsorship")).headers.get("x-from"), "node", "only the /sponsor path itself is the sponsor's");
+    assert.equal((await (await at("/sponsor?x=1")).json()).url, "/?x=1", "a query on the sponsor's root");
+    assert.equal((await (await at("/sponsor")).json()).url, "/");
   } finally { proxy.close(); node.close(); sponsor.close(); }
+});
+
+test("the proxy forwards no header a client could pose as another address with, nor hop-by-hop ones", async () => {
+  const seen = [];
+  const node = await new Promise((ok) => { const s = createServer((req, res) => { seen.push(req.headers); res.setHeader("Connection", "close"); res.end("ok"); }); s.listen(0, "127.0.0.1", () => ok(s)); });
+  const proxy = await startProxy({ nodePort: node.address().port, sponsorPort: 1, seller: "bafyseller" });
+  try {
+    await fetch(`http://127.0.0.1:${proxy.port}/api/chain/info`, { headers: { "X-Forwarded-For": "6.6.6.6", Forwarded: "for=6.6.6.6", "X-Real-IP": "6.6.6.6", "Proxy-Authorization": "x", Accept: "application/json" } });
+    const h = seen[0];
+    for (const k of ["x-forwarded-for", "forwarded", "x-real-ip", "proxy-authorization"]) assert.equal(h[k], undefined, k);
+    assert.equal(h.accept, "application/json", "end-to-end headers pass");
+    assert.equal(h.host, `127.0.0.1:${node.address().port}`);
+  } finally { proxy.close(); node.close(); }
 });
 
 test("the proxy says which side does not answer", async () => {
@@ -59,4 +74,13 @@ test("a pinned tool from its own URL: a bare binary, or a tarball with it at the
   assert.deepEqual(fetches, ["https://example.test/tun"], "no releases.json for a tool with its own URL");
   assert.equal(readFileSync(paths.tun, "utf8"), bare.toString());
   await assert.rejects(installTools({ home: temp(), platform: "linux-amd64", fetchImpl: async () => new Response("other"), log: () => {}, pinned }), /not the pinned/);
+});
+
+test("behind the proxy the sponsor stays on loopback; without one, a public sponsor URL opens every interface", async () => {
+  const { sponsorArgs } = await import("../host/sponsor.mjs");
+  const base = { node: "http://127.0.0.1:8080", cookieFile: "c", key: "k", port: 8650, market: "Nexus/hearth", storageRate: 1, storageFile: "s", storageBudget: 1, payTo: "p" };
+  const host = (o) => { const a = sponsorArgs({ ...base, ...o }); return a[a.indexOf("--host") + 1]; };
+  assert.equal(host({ publicURL: "https://x.trycloudflare.com/sponsor", loopback: true }), "127.0.0.1");
+  assert.equal(host({ publicURL: "https://host.example/sponsor" }), "0.0.0.0");
+  assert.equal(host({}), "127.0.0.1");
 });

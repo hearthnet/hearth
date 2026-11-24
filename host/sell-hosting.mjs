@@ -114,6 +114,10 @@ const { values: args } = parseArgs({
     "sponsor-url": { type: "string" }, "storage-rate": { type: "string", default: String(DEFAULT_STORAGE_RATE) },
     "storage-budget": { type: "string", default: String(DEFAULT_STORAGE_BUDGET) },
     resume: { type: "boolean", default: false },
+    // The sponsor stays on loopback though public (a proxy beside it serves --sponsor-url).
+    "sponsor-loopback": { type: "boolean", default: false },
+    // No URL at all: a url record written before is removed.
+    "key-only": { type: "boolean", default: false },
   },
 });
 for (const name of ["market", "key"]) if (!args[name]) throw new Error(`--${name} is required`);
@@ -272,6 +276,7 @@ async function nextVersion(m, newest) {
     if (was.blocks === sponsorAddress && was.sponsor === offerSponsor && was.wholePath) return undefined;
     offer = { ...was, created: m.height };
     delete offer.mines;
+    if (!was.wholePath) log(`offer ${offerId} was priced per order; its new version prices per chain on the path: ${was.price} × ${was.parent.split("/").length + 1} chains for a chain under ${was.parent}, renewals included`);
   }
   offer.blocks = sponsorAddress;
   offer.wholePath = true;   // an offer from before 2.1 gets a version priced per chain on the path
@@ -292,6 +297,10 @@ async function ensureOffer(m, newest) {
   if (storageFile && !m.versions.has(`${self}/${storageFile.id}`)) {
     const { value } = storageOfferFrom(storageFile, m.height);
     log("writing storage offer", offerKey(self, storageFile.id, m.height), await send([{ key: offerKey(self, storageFile.id, m.height), newValue: value }]));
+    return true;
+  }
+  if (args["key-only"] && m.urlValues.has(self)) {
+    log("removing the url record: key only", await send([{ key: urlKey(self), oldValue: m.urlValues.get(self) }]));
     return true;
   }
   if (urlValue && m.urlValues.get(self) !== urlValue) {
@@ -324,8 +333,8 @@ function startSponsor() {
   mkdirSync(sponsorDir, { recursive: true });
   sponsor = supervise({ bin: sponsorBin, log, args: sponsorArgs({ node: rpcURL(), cookieFile: join(root, "chains/Nexus/.cookie"), key: sponsorKey,
     port: args["sponsor-port"], publicURL: sponsorURL, market: marketPath, storageRate: args["storage-rate"], storageFile: join(sponsorDir, "storage.json"),
-    storageBudget, payTo: self }) });
-  log(`sponsor on ${sponsorURL ? `every interface, port ${args["sponsor-port"]}, public at ${sponsorURL}` : `127.0.0.1:${args["sponsor-port"]} only (no --sponsor-url: the offer names no sponsor)`}`);
+    storageBudget, payTo: self, loopback: args["sponsor-loopback"] }) });
+  log(`sponsor on ${sponsorURL && args["sponsor-loopback"] ? `127.0.0.1:${args["sponsor-port"]}, public at ${sponsorURL} through the proxy beside it` : sponsorURL ? `every interface, port ${args["sponsor-port"]}, public at ${sponsorURL}` : `127.0.0.1:${args["sponsor-port"]} only (no --sponsor-url: the offer names no sponsor)`}`);
 }
 
 /**

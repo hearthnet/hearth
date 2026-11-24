@@ -386,6 +386,7 @@ test("`hearth sell --install` writes the node's and the seller's units for this 
   assert.ok(unit.includes(join(bin, "node")) && !unit.includes(process.execPath), "the node on PATH, not this process's resolved path");
   assert.ok(unit.includes(join(node.root, `hearth/${offerFromFlags({ price: "100/day" }).id}.json`)) && unit.includes(node.sponsor));
   assert.ok(unit.includes("--resume"), "a service restart never reopens a closed offer");
+  assert.ok(!unit.includes("--public") && !unit.includes("--sponsor-loopback"), "a node of your own is not made public unless --public");
   assert.ok(existsSync(join(node.root, "hearth/reopen")) && !existsSync(join(node.root, "hearth/closing")), "but installing puts the offer on sale: the service's next start writes it once");
   assert.match(out, process.platform === "darwin" ? /launchctl bootstrap gui\/\$\(id -u\) .*net\.hearth\.node\.plist && launchctl bootstrap/ : /systemctl --user enable --now hearth-node.service hearth.service/);
 });
