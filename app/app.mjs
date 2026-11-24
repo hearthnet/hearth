@@ -9,7 +9,7 @@
 import * as sdk from "../vendor/lattice-sdk.js";
 import { reader, holdsVolume } from "../client/market.mjs";
 import { judge, judgeStorage, sameGenesis } from "../client/verdict.mjs";
-import { parseOffer, parseOrderKey, parsePayload, parseStorageOffer, parseHostURL, sponsorAt, offerAt, isClosed, moduleCID, isAddress, SETTLE, burnAddress, pathFromNexus, pathPrice } from "../client/records.mjs";
+import { parseOffer, parseOrderKey, parsePayload, parseStorageOffer, parseHostURL, sponsorAt, offerAt, isClosed, moduleCID, isAddress, SETTLE, CREATED_WINDOW, burnAddress, pathFromNexus, pathPrice } from "../client/records.mjs";
 import { checkListed, checkServing, sponsorURL as askable } from "../client/service.mjs";
 import { snippet } from "./snippet.mjs";
 import { uniqueNodes, nodesNow, chooseAnchor, disagreeMessage, blocksTime, CHECKPOINT_AFTER, WALK } from "./anchor.mjs";
@@ -146,6 +146,7 @@ function renderChip() {
 
 // ---- the market, judged ----
 let market = null, verdicts = new Map(), loading = null;
+const renewing = new Map();  // order key → the note of its renewal in flight, or how it ended
 async function loadMarket(force = false) {
   if (!force && market && Date.now() - market.at < 15_000) return market;
   loading ??= (async () => {
@@ -1048,8 +1049,13 @@ async function viewOrder(view, key, current) {
   if (!current()) return;
   const path = parseOrderKey(key)?.path ?? key;
   if (!o) {
-    view.innerHTML = `<section class="stack"><h1 class="mono">${esc(path)}</h1><div class="notice info">Your payment is on its way into a block. This page updates by itself.</div></section>`;
-    setTimeout(() => current() && route(), 8000);
+    // An order lands within CREATED_WINDOW blocks of the height its key names, or never.
+    const keyed = parseOrderKey(key)?.created;
+    const lost = keyed !== undefined && m.height > keyed + CREATED_WINDOW;
+    view.innerHTML = `<section class="stack"><h1 class="mono">${esc(path)}</h1>${lost
+      ? `<div class="notice">This order did not land in a block (market block ${fmt(m.height)}; it had to by ${fmt(keyed + CREATED_WINDOW)}), so no coin was taken. <a href="#/">Launch again</a>.</div>`
+      : `<div class="notice info">Your payment is on its way into a block. This page updates by itself.</div>`}</section>`;
+    if (!lost) setTimeout(() => current() && route(), 8000);
     return;
   }
   const v = verdicts.get(o.key);
@@ -1144,10 +1150,17 @@ async function viewOrder(view, key, current) {
         : `The test write failed: ${e.message}`;
     }
   });
+  // A renewal in flight outlives this render (the page re-renders every 15 s): its note is kept by order.
+  const say = (text) => { renewing.set(o.key, text); const el = $("#renewNote"); if (el && current()) el.textContent = text; };
+  if (renewing.has(o.key)) { $("#renewNote") && ($("#renewNote").textContent = renewing.get(o.key)); $("#renew") && ($("#renew").disabled = true); }
   $("#renew")?.addEventListener("click", async () => {
     const periods = BigInt(Math.max(1, Math.floor(Number($("#more").value) || 1)));
     if (!me) { $("#renewNote").textContent = "Make an account and buy coin first."; return; }
-    $("#renewNote").textContent = "Paying…";
+    if (renewing.has(o.key) && !renewing.get(o.key).startsWith("Paid") && !renewing.get(o.key).startsWith("Your payment did not")) return;
+    $("#renew").disabled = true;
+    say("Paying…");
+    // Every key a try built (a retried send rebuilds at a newer height; any one of them may land) and the newest body.
+    const tried = []; let body, nonce;
     try {
       await send(async () => {
         const fresh = await r.market(cfg.market);
@@ -1156,11 +1169,28 @@ async function viewOrder(view, key, current) {
         if (!now || !isOpen(fresh, now)) throw new Error("This offer has closed: it sells no more time.");
         if (pathPrice(now, o.path) !== pathPrice(offer, o.path) || now.period !== offer.period) throw new Error(`The offer's terms changed: now ${fmt(pathPrice(now, o.path))} ${coinName} per ${duration(now.period)}. Reload to pay at them.`);
         const w = renewWrite({ host: o.host, id: o.id, offer: now, payer: me.address, path: o.path, periods, height: fresh.height });
-        const { nonce } = await r.account(cfg.market, me.address);
-        return recordsBody({ signer: me.address, nonce, chainPath: marketPath, actions: w.actions, payments: w.payments, fee: await fee(cfg.market) });
+        ({ nonce } = await r.account(cfg.market, me.address));
+        tried.push({ key: w.actions[0].key, height: fresh.height });
+        return (body = recordsBody({ signer: me.address, nonce, chainPath: marketPath, actions: w.actions, payments: w.payments, fee: await fee(cfg.market) }));
       });
-      $("#renewNote").textContent = "Paid. It shows once it is in a block.";
-    } catch (e) { $("#renewNote").textContent = e.message; }
+      say("Sent. Waiting for it to be in a block…");
+      // A node may drop it from its pool (its miner was down, say): send the same payment again
+      // (same nonce, so only one lands) until one lands, or every key's window has passed.
+      const last = tried.reduce((h, t) => (t.height > h ? t.height : h), 0n);
+      for (let sentAt = Date.now(); ;) {
+        await sleep(10_000);
+        const fresh = await r.market(cfg.market).catch(() => undefined);
+        if (!fresh) continue;
+        if (fresh.renewals.some((x) => tried.some((t) => t.key === x.key))) { say("Paid: it is in a block, and counts once it settles."); break; }
+        if (fresh.height > last + CREATED_WINDOW) { say("Your payment did not land in a block in time, so no coin was taken. Pay again."); break; }
+        if (Date.now() - sentAt > 60_000) {
+          const { nonce: next } = await r.account(cfg.market, me.address).catch(() => ({ nonce: -1n }));
+          if (next >= 0n && next <= nonce) await submit(sdk, cfg.node, body, me.privateKey).catch(() => {});
+          sentAt = Date.now();
+        }
+      }
+    } catch (e) { say(e.message); }
+    if (current() && $("#renew")) $("#renew").disabled = false;
   });
   if (!launched && v.kind !== "void") setTimeout(() => current() && route(), 15000);
 }
