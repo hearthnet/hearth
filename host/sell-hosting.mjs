@@ -9,7 +9,7 @@
 //     [--hashrate <hashes/s>] [--sponsor-bin lattice-sponsor] [--sponsor-port 8650] [--sponsor-url https://host.example/sponsor] \
 //     [--storage-rate 10240] [--lattice /usr/local/bin/lattice] [--interval 30] [--resume]
 //
-// It needs a node of Lattice 5.0.0 or newer, and says so otherwise. Each
+// It needs a node of Lattice 5.1.0 or newer, and says so otherwise. Each
 // pass waits until the node has synced the market (`syncing market: h / H`)
 // before it reads anything there, funds, writes or burns.
 //

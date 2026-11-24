@@ -51,7 +51,7 @@ own (above). A node of your own there that is not running stops it ("the node
 at <dir> is not running"); only `hearth sell` makes Hearth's node, and the
 other verbs, on a machine that sold nothing, say so. Beside a node
 of your own it checks that the node has what it needs (`GET /config` saying
-which layer lists each chain) and stops with "Hearth needs node 5.0.0 or
+which layer lists each chain) and stops with "Hearth needs node 5.1.0 or
 newer (you have X: ...)" beside an older one, X as `GET /status` reports it. It makes the seller's key at
 `<root>/hearth/seller.json` (mode 0600; it prints the address, never the
 key, and refuses a key file others can read) unless there is one, has the

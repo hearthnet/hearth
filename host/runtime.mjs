@@ -18,11 +18,11 @@ export const RELEASES_URL = "https://lattice.build/releases.json";
  */
 export const PINNED = {
   "lattice-node": {
-    version: "5.0.0",
+    version: "5.1.0",
     bins: ["lattice", "lattice-node"],
     sha256: {
-      "macos-arm64": "6305f8c6adfe15996a872e1a2a5aea36586bbfbe49b9847204fa802f0224e0db",
-      "linux-amd64": "f9caaa488b01d54fa86e7d5a697949b8d1db230248b535b71bcc97b784296bf4",
+      "macos-arm64": "MACOS_PENDING",
+      "linux-amd64": "cbd57d3773aa786e9fd1ac3aaaf495a3744fef78468b6d8d99e87a2a0427b1bb",
     },
   },
   "lattice-sponsor": {

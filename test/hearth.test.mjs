@@ -145,7 +145,7 @@ test("--install writes units for the node and the seller, the seller after the n
  * which layer lists each chain; `chains` maps a chain path to its status
  * (absent: not hosted).
  */
-async function freshNode({ version = "4.0.0+dev", old = false, chains = {}, balance } = {}) {
+async function freshNode({ version = "5.1.0+dev", old = false, chains = {}, balance } = {}) {
   const puts = [], posted = [];
   let fragment;
   const server = createServer((req, res) => {
@@ -210,16 +210,26 @@ test("`hearth sell` beside a node older than 4.0.1 says so and stops", async () 
   try {
     const { code, out } = await sell(node);
     assert.equal(code, 2, out);
-    assert.match(out, /Hearth needs node 5\.0\.0 or newer \(you have 4\.0\.0: its GET \/config does not say which layer lists each chain\)/);
+    assert.match(out, /Hearth needs node 5\.1\.0 or newer \(you have 4\.0\.0: its GET \/config does not say which layer lists each chain\)/);
     assert.deepEqual(node.puts, [], "it changes nothing on the node");
     // A 4.0.0 `lattice` has no `config`: lattice.json finds the node, only to say this.
     const old = join(temp(), "lattice");
     writeFileSync(old, "#!/bin/sh\necho \"Error: Unexpected argument 'config'\" >&2\nexit 64\n", { mode: 0o755 });
     const viaFile = await hearth(["sell", "--root", node.root, "--once", "--lattice", old, "--sponsor-bin", node.sponsor]);
-    assert.match(viaFile.out, /Hearth needs node 5\.0\.0 or newer \(you have 4\.0\.0: its GET \/config does not say which layer lists each chain\)/);
+    assert.match(viaFile.out, /Hearth needs node 5\.1\.0 or newer \(you have 4\.0\.0: its GET \/config does not say which layer lists each chain\)/);
     const burnt = await hearth(["burn", "5", "--chain", DEFAULT_MARKET, "--root", node.root, "--lattice", node.lattice]);
     assert.equal(burnt.code, 2);
-    assert.match(burnt.out, /Hearth needs node 5\.0\.0 or newer/);
+    assert.match(burnt.out, /Hearth needs node 5\.1\.0 or newer/);
+  } finally { node.close(); }
+});
+
+test("`hearth sell` beside a 5.0.0 node says it cannot start a buyer's chain, and stops", async () => {
+  const node = await freshNode({ version: "5.0.0" });
+  try {
+    const { code, out } = await sell(node);
+    assert.equal(code, 2, out);
+    assert.match(out, /Hearth needs node 5\.1\.0 or newer \(you have 5\.0\.0: it cannot start a buyer's chain from the genesis the order carries\)/);
+    assert.deepEqual(node.puts, [], "it changes nothing on the node");
   } finally { node.close(); }
 });
 
@@ -289,7 +299,7 @@ test("a missing --sponsor-bin says where to get one; with none on PATH, Hearth u
     assert.match(out, /no sponsor at \/nonexistent\/lattice-sponsor: .*give --sponsor-bin <path> to one, or leave --sponsor-bin out and Hearth runs its own/);
     // None on PATH: Hearth's own, installed under ~/.hearth (here already there, so nothing downloads).
     const home = temp();
-    for (const bin of ["lattice-node-5.0.0/lattice", "lattice-node-5.0.0/lattice-node", "lattice-sponsor-1.0.0/lattice-sponsor"]) {
+    for (const bin of ["lattice-node-5.1.0/lattice", "lattice-node-5.1.0/lattice-node", "lattice-sponsor-1.0.0/lattice-sponsor"]) {
       mkdirSync(dirname(join(home, ".hearth/bin", bin)), { recursive: true });
       writeFileSync(join(home, ".hearth/bin", bin), "#!/bin/sh\nexit 1\n");
       chmodSync(join(home, ".hearth/bin", bin), 0o755);
