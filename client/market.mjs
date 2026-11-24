@@ -2,8 +2,7 @@
 // CID from a block the node names (state.mjs), so a node can withhold or
 // serve an old tip, but cannot forge a record.
 import { get, list, volumeLoader } from "./state.mjs";
-import { RENEW, inForce, offerText, parseOfferKey, parseOrderKey } from "./records.mjs";
-import { genesisFacts } from "./verdict.mjs";
+import { offerKey, parseOfferKey, parseOrderKey } from "./records.mjs";
 
 /** Where receipt state keeps a receipt: a domain-separated SHA-256 of its key, in hex. */
 export async function receiptStorageKey(key) {
@@ -57,45 +56,67 @@ export function reader(sdk, node, { fetchImpl = (...a) => fetch(...a), cache } =
     return out;
   };
 
+  const stateAt = async (chainPath, height) => (await block((await api(`/api/block/${height}`, chainPath)).hash)).state.generalStateCID;
+  const landings = new Map();  // order key → { landed, terms }: an order is written once and never deleted
+  /**
+   * Where an order landed: the lowest market height whose state holds its
+   * key (bisected: a key is written once and never removed), and the
+   * offer's text in that block.
+   */
+  async function landing(chainPath, key, ref, height) {
+    if (landings.has(key)) return landings.get(key);
+    let lo = 0n, hi = height;
+    while (lo < hi) {
+      const mid = (lo + hi) / 2n;
+      if (await get(load, await stateAt(chainPath, mid), key) !== undefined) hi = mid; else lo = mid + 1n;
+    }
+    const found = { landed: lo, terms: await get(load, await stateAt(chainPath, lo), offerKey(ref.host, ref.id)) };
+    landings.set(key, found);
+    return found;
+  }
+
   return {
     node, volumes, api, hasChild, tip, block,
 
     /**
-     * Offers, urls, orders and renewals at the tip of the market chain.
-     * `urls` maps each host to its read URL; `urlValues` to its url record as
-     * written (`parseHostURL` reads it).
-     * `versions` maps `<host>/<id>` to every version's text (the text
-     * `parseOffer` or `parseStorageOffer` takes), oldest first: what
-     * `judge` reads. `offers` maps it to the version in force at the tip
-     * (`inForce` in records.mjs: written at least CREATED_WINDOW blocks
-     * ago), the terms an order placed now goes by; an offer whose every
-     * version is newer than that is in `versions` only.
-     * `orders` are the ones carrying a payload, `renewals` the ones paying
-     * for more time.
+     * Offers and orders at the tip of the market chain. `offers` maps
+     * `<host>/<id>` to the offer's text now: the terms an order placed now
+     * asserts. `orders` (renewals among them, their value RENEW) each carry
+     * `landed`, the market height it landed at, and `terms`, the offer's
+     * text in that block: what `judge` reads.
      */
     async market(chainPath) {
       const t = await tip(chainPath);
       const root = t.state.generalStateCID;
-      const [offerEntries, urls, orderEntries] = await Promise.all(["offer/", "url/", "order/"].map((p) => entries(root, p)));
-      const versions = new Map();
+      const [offerEntries, orderEntries] = await Promise.all(["offer/", "order/"].map((p) => entries(root, p)));
+      const offers = new Map();
       for (const [key, value] of offerEntries) {
         const ref = parseOfferKey(key);
-        if (!ref) continue;
-        const id = `${ref.host}/${ref.id}`;
-        versions.set(id, [...(versions.get(id) ?? []), [ref.created, offerText(ref.created, value)]]);
+        if (ref) offers.set(`${ref.host}/${ref.id}`, value);
       }
-      const orders = [], renewals = [];
+      const orders = [];
       for (const [key, value] of orderEntries) {
         const ref = parseOrderKey(key);
         if (!ref) continue;
-        if (value === RENEW) renewals.push({ key, ...ref });
-        else orders.push({ key, ...ref, buyer: ref.payer, payloadText: value });
+        const { landed, terms } = await landing(chainPath, key, ref, t.height);
+        orders.push({ key, ...ref, value, landed, terms });
       }
-      for (const [id, list] of versions) versions.set(id, list.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, text]) => text));
-      const offers = new Map([...versions].flatMap(([id, texts]) => { const text = inForce(texts, t.height); return text === undefined ? [] : [[id, text]]; }));
-      return { height: t.height, hash: t.hash, offers, versions,
-        urls: new Map(urls.map(([key, value]) => [key.slice("url/".length), value.split("\n")[0]])),
-        urlValues: new Map(urls.map(([key, value]) => [key.slice("url/".length), value])), orders, renewals };
+      return { height: t.height, hash: t.hash, offers, orders };
+    },
+
+    /** The spec `chainPath` runs, from its tip block by CID, or undefined when the node holds no such chain. */
+    async spec(chainPath) {
+      let t;
+      try { t = await tip(chainPath); } catch (e) { if (e.status === 404 || e.status === 400) return undefined; throw e; }
+      return (await load(t.block.specCID, t.volume)).node;
+    },
+
+    /** `Map(path → spec)` for every chain above each of `paths`, those this node holds. */
+    async specsAbove(paths) {
+      const above = new Set(paths.flatMap((p) => p.split("/").slice(0, -1).map((_, i, s) => s.slice(0, i + 1).join("/"))));
+      const out = new Map();
+      await Promise.all([...above].map(async (p) => { const spec = await this.spec(p); if (spec) out.set(p, spec); }));
+      return out;
     },
 
     /**
@@ -172,23 +193,6 @@ export function reader(sdk, node, { fetchImpl = (...a) => fetch(...a), cache } =
       return out;
     },
 
-    /** How `chainPath`'s genesis was built, or undefined when the node holds no such chain. */
-    async genesis(chainPath) {
-      let hash;
-      try { ({ hash } = await api("/api/block/0", chainPath)); } catch (e) { if (e.status === 404 || e.status === 400) return undefined; throw e; }
-      const blockVolume = await volumes.get(hash);
-      const decoded = sdk.decodeCanonicalBlock(blockVolume.rootBytes());
-      if (decoded.height !== 0n || decoded.parentCID !== undefined) throw new Error("not a genesis block");
-      const within = (cid, volume) => load(cid, volume ?? blockVolume);
-      const transactions = [];
-      for await (const [, signed] of list(within, decoded.transactionsCID)) {
-        const transaction = await within(signed.rawCID);
-        const { node: body } = await within(transaction.node.body.rawCID, transaction.volume);
-        const isSigned = transaction.node.signatures.length > 0 || body.signers.length > 0;
-        transactions.push({ cid: signed.rawCID, signed: isSigned, credited: body.accountActions.filter((a) => BigInt(a.delta) > 0n).map((a) => a.owner) });
-      }
-      return { hash, ...genesisFacts(decoded, transactions) };
-    },
   };
 }
 
