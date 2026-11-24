@@ -21,7 +21,7 @@ export const PINNED = {
     version: "5.1.0",
     bins: ["lattice", "lattice-node"],
     sha256: {
-      "macos-arm64": "MACOS_PENDING",
+      "macos-arm64": "95414a12637121682d64e6e5e4c03f81be20dcfa567856affcbbd5cf37e9f7f4",
       "linux-amd64": "cbd57d3773aa786e9fd1ac3aaaf495a3744fef78468b6d8d99e87a2a0427b1bb",
     },
   },
