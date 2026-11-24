@@ -64,6 +64,27 @@ async function findNode() {
 if (!cfg.node) cfg.node = await findNode();
 const r = reader(sdk, cfg.node);
 
+/**
+ * A reader of `chainPath` (an offer's parent, which the market's node may
+ * not host): the app's node when it serves the chain, else the fastest node
+ * the entry lists for it, as `findNode` finds the market's.
+ */
+const readers = new Map();
+async function readerOf(chainPath) {
+  if (readers.has(chainPath)) return readers.get(chainPath);
+  const path = chainPath.split("/");
+  let found;
+  try { await r.api("/api/chain/info", chainPath); found = r; } catch {}
+  if (!found) {
+    let hosts = [];
+    try { hosts = await new sdk.EndpointResolver(new sdk.NodeClient(cfg.entry, ["Nexus"])).resolve(path, AbortSignal.timeout(10_000)); } catch {}
+    try { found = reader(sdk, await Promise.any(hosts.map(async ({ url }) => { await new sdk.NodeClient(url, path).chainInfo(AbortSignal.timeout(5_000)); return url; }))); }
+    catch { throw new Error(`No node found that serves ${chainPath}. Try again, or give ?node= a node that serves it and the market.`); }
+  }
+  readers.set(chainPath, found);
+  return found;
+}
+
 // ---- small helpers ----
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -504,7 +525,7 @@ async function viewLaunch(view, _, current) {
       }
       const hosts = new Set(offers.map(([k]) => k.split("/")[0]));
       const takenHere = fresh.orders.some((x) => hosts.has(x.host) && x.path === path && ["owed", "pending"].includes(verdicts.get(x.key)?.kind) && x.buyer !== me.address);
-      const exists = await r.hasChild(offers[0][1].parent, path.split("/").at(-1));
+      const exists = await (await readerOf(offers[0][1].parent)).hasChild(offers[0][1].parent, path.split("/").at(-1));
       if (takenHere || exists) throw new Error(`${path} is already ${exists ? "a chain" : "ordered at one of these hosts"}; pick another name.`);
       button.textContent = offers.length > 1 ? "Paying the hosts…" : "Paying the host…";
       const payload = { spec: s, premineTo: s.premine > 0n ? me.address : null, modules: mods, genesisTransactions: [] };
