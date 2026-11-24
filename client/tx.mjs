@@ -1,7 +1,7 @@
 // Transactions for the market, built as the SDK's bodies, signed with one
 // key, and sent to a node. The bodies follow the policy: an order's payment
 // credits come in the order hosts are first owed.
-import { CREATED_WINDOW, RENEW, formatOffer, formatPayload, offerKey, orderKey, pathPrice, storageOrderValue, urlKey } from "./records.mjs";
+import { RENEW, formatOffer, offerKey, orderKey, parseOffer, pathPrice } from "./records.mjs";
 
 const empty = { actions: [], depositActions: [], receiptActions: [], withdrawalActions: [] };
 
@@ -21,54 +21,38 @@ export function recordsBody({ signer, nonce, chainPath, actions, payments = [], 
   };
 }
 
-/** The writes for a new offer made at `height`, the market's current height, and, if given, the host's url. */
-export function offerActions({ host, id, offer, height, url, oldURL }) {
-  return [
-    { key: offerKey(host, id, height), newValue: formatOffer(offer) },
-    ...(url === undefined || url === oldURL ? [] : [{ key: urlKey(host), ...(oldURL === undefined ? {} : { oldValue: oldURL }), newValue: url }]),
-  ];
-}
+/**
+ * The write that sets the host's offer `id` to `offer`: a new one, or a
+ * change of `old` (its text now). Every order that asserted `old` and has
+ * not landed is then refused.
+ */
+export const offerWrite = ({ host, id, offer, old }) => ({ key: offerKey(host, id), ...(old === undefined ? {} : { oldValue: old }), newValue: formatOffer(offer) });
+
+/** The write that closes the host's offer `id`, whose text is `old`. */
+export const closeWrite = ({ host, id, old }) => ({ key: offerKey(host, id), oldValue: old });
 
 /**
- * The write and payment for a new order: `periods` periods of `offer` from
- * `height`, the market's current height, for `path`, built from `payload`.
+ * The writes and payment for an order: `periods` periods at the offer whose
+ * text is `terms` (asserted unchanged, so the order lands only on these
+ * terms), for `path`, carrying `value` (`formatOrderValue`, or RENEW to pay
+ * for more time on a chain already ordered). `specs` are the specs of every
+ * chain on the path, Nexus first, the ordered chain last. `n` tells the
+ * payer's orders apart: its nonce on the market chain will do.
  */
-export function orderWrite({ host, id, offer, buyer, path, payload, periods = 1n, height }) {
-  const paid = pathPrice(offer, path) * periods;
+export function orderWrite({ host, id, terms, payer, n, path, value, specs, periods = 1n }) {
+  const paid = pathPrice(parseOffer(terms), specs) * periods;
   return {
-    actions: [{ key: orderKey({ host, id, payer: buyer, height, paid, path }), newValue: formatPayload(payload) }],
+    actions: [
+      { key: offerKey(host, id), oldValue: terms, newValue: terms },
+      { key: orderKey({ host, id, payer, n, paid, path }), newValue: value },
+    ],
     payments: [{ to: host, amount: paid }],
-    order: { created: height, paid },
+    paid,
   };
 }
 
-/** The write and payment for `periods` more periods of `offer` on `path`, paid by `payer` at `height`. */
-export function renewWrite({ host, id, offer, payer, path, periods = 1n, height }) {
-  const paid = pathPrice(offer, path) * periods;
-  return {
-    actions: [{ key: orderKey({ host, id, payer, height, paid, path }), newValue: RENEW }],
-    payments: [{ to: host, amount: paid }],
-    order: { created: height, paid },
-  };
-}
-
-/**
- * The write and payment for keeping `bytes` (as the host's sponsor counted
- * them) of the file `root` at a storage offer, ordered by `payer` at `height`.
- * Orders at several hosts go in one transaction: their actions and payments
- * concatenated.
- */
-export function storageOrderWrite({ host, id, offer, payer, root, bytes, height }) {
-  const paid = (bytes + offer.bytesPerCoin - 1n) / offer.bytesPerCoin;
-  return {
-    actions: [{ key: orderKey({ host, id, payer, height, paid, path: root }), newValue: storageOrderValue(bytes) }],
-    payments: [{ to: host, amount: paid }],
-    order: { created: height, paid },
-  };
-}
-
-/** The message a payer signs (`signPreimage`) to claim a payment at a storage sponsor for `root`. */
-export const storageClaim = (chain, txCID, root) => `lattice-sponsor-pay:v1:${chain}:${txCID}:${root}`;
+/** The writes and payment for `periods` more periods of the chain at `path`. */
+export const renewWrite = (o) => orderWrite({ ...o, value: RENEW });
 
 /** A seller locks `amountDeposited` market coin for `amountDemanded` parent coin. */
 export function depositBody({ seller, nonce, chainPath, depositNonce, amountDemanded, amountDeposited, fee }) {
@@ -108,8 +92,6 @@ export async function submit(sdk, node, body, privateKey, fetchImpl = (...a) => 
   }
   try { return JSON.parse(text).transactionCID ?? sdk.signedTransactionCID({ [publicKey]: signature }, body); } catch { return sdk.signedTransactionCID({ [publicKey]: signature }, body); }
 }
-
-export { CREATED_WINDOW };
 
 /** A key file as `lattice key generate` writes it, so `lattice` commands take it. */
 export const keyFileJSON = (sdk, privateKey) => JSON.stringify({
