@@ -6,7 +6,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { startProxy, startTunnel } from "../host/public.mjs";
+import { openTunnel, startProxy, startTunnel } from "../host/public.mjs";
 import { installTools } from "../host/runtime.mjs";
 
 const temp = () => mkdtempSync(join(tmpdir(), "hearth-public-"));
@@ -100,4 +100,15 @@ test("behind the proxy the sponsor stays on loopback; without one, a public spon
   assert.equal(host({ publicURL: "https://x.trycloudflare.com/sponsor", loopback: true }), "127.0.0.1");
   assert.equal(host({ publicURL: "https://host.example/sponsor" }), "0.0.0.0");
   assert.equal(host({}), "127.0.0.1");
+});
+
+test("a quick tunnel Cloudflare refuses for now is tried again, then the last failure stands", async () => {
+  let n = 0; const said = [];
+  const start = async () => { if (++n < 3) throw new Error("cloudflared exited (1) before giving a URL:\nquick tunnel provisioning failed with status 429: [10000] Tunnelstore request failed"); return { url: "https://ok.trycloudflare.com" }; };
+  assert.deepEqual(await openTunnel({ start, delaysMs: [1, 1, 1], log: (l) => said.push(l) }), { url: "https://ok.trycloudflare.com" });
+  assert.equal(n, 3);
+  assert.match(said[0], /no quick tunnel yet \(status 429: \[10000\] Tunnelstore request failed\): trying again in 0.001 s/);
+  n = 0;
+  await assert.rejects(openTunnel({ start: async () => { n++; throw new Error("boom"); }, delaysMs: [1, 1] }), /boom/);
+  assert.equal(n, 3, "the first try and one per wait");
 });

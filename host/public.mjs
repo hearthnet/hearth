@@ -81,3 +81,19 @@ export function startTunnel({ bin, port, timeoutMs = 60_000 }) {
     child.once("exit", (code) => { clearTimeout(timer); fail(new Error(`cloudflared exited (${code}) before giving a URL:\n${said.trim().split("\n").slice(-5).join("\n")}`)); });
   });
 }
+
+/**
+ * `startTunnel`, tried again when Cloudflare refuses a quick tunnel for now
+ * (it rate-limits them: HTTP 429) or cloudflared fails: waits of `delaysMs`
+ * between tries, then the last failure.
+ */
+export async function openTunnel({ bin, port, log = () => {}, delaysMs = [15_000, 30_000, 60_000, 120_000, 240_000], start = startTunnel }) {
+  for (let i = 0; ; i++) {
+    try { return await start({ bin, port }); } catch (e) {
+      if (i >= delaysMs.length) throw e;
+      const why = e.message.match(/status \d+[^\n]*/)?.[0] ?? e.message.split("\n")[0];
+      log(`no quick tunnel yet (${why}): trying again in ${delaysMs[i] / 1000} s`);
+      await new Promise((r) => setTimeout(r, delaysMs[i]));
+    }
+  }
+}

@@ -61,7 +61,7 @@ import { DEFAULT_MARKET, DEFAULT_PRICE, WHY_SELL, DEFAULT_STORAGE_RATE, authedFe
   sellerFiles, serviceUnits, sweep, waitSynced } from "../host/hearth.mjs";
 import { sponsorAnswers, sponsorBinary, sponsorStorage, unpin } from "../host/sponsor.mjs";
 import { initManagedNode, installTools, keepManagedNode, managedRoot, nodeAnswers, runManagedNode, TUNNEL } from "../host/runtime.mjs";
-import { PUBLIC_READ_PORT, startProxy, startTunnel } from "../host/public.mjs";
+import { openTunnel, PUBLIC_READ_PORT, startProxy } from "../host/public.mjs";
 import { REMOTE_STORAGE, judgeOwn, report } from "../host/status.mjs";
 import { isRootCID } from "../client/records.mjs";
 import { stop } from "../host/stop.mjs";
@@ -476,7 +476,7 @@ try {
     catch { fail(`the node at ${root} does not answer on its public read port ${readPort}: restart it (it takes publicRead when it starts), then run hearth sell --public again`); }
     const proxy = await startProxy({ nodePort: readPort, sponsorPort: Number(a["sponsor-port"] ?? 8650), seller: address });
     const { cloudflared } = await installTools({ home: homedir(), pinned: TUNNEL });
-    tunnel = await startTunnel({ bin: cloudflared, port: proxy.port });
+    tunnel = await openTunnel({ bin: cloudflared, port: proxy.port, log: (line) => console.log(line) });
     a.url = tunnel.url;
     a["sponsor-url"] = `${tunnel.url}/sponsor`;
     console.log(`public at ${tunnel.url} (a Cloudflare quick tunnel to this machine: a new URL each start, which the seller writes)`);
