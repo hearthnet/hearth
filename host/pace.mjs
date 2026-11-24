@@ -59,7 +59,7 @@ const withAncestors = (paths) => [...new Set(paths.flatMap((p) => p.split("/").m
  * `{ stop, done, rate }`: `rate()` is the measured hashes per second.
  */
 export function miner({ rpc, fetchImpl, to, log = console.log, batch = 1n << 20n, idle = 1000 }) {
-  let stopped = false, wake, hashes = 0n, since = Date.now(), measured = 0;
+  let stopped = false, wake, hashes = 0n, hashing = 0, since = Date.now(), measured = 0;
   const sleep = (ms) => new Promise((r) => { wake = r; setTimeout(r, ms); });
   const get = async (route) => {
     const response = await fetchImpl(new URL(route, rpc));
@@ -84,7 +84,9 @@ export function miner({ rpc, fetchImpl, to, log = console.log, batch = 1n << 20n
     if (!carried.length) { say("miner: the node's template carries no chain yet"); return false; }
     const prefix = t.prefixHex ? Buffer.from(t.prefixHex, "hex") : prefixOf(t.block);
     for (let at = start; ;) {
+      const began = performance.now();
       const hit = await search(prefix, BigInt(t.searchTarget), at, batch - (at - start));
+      hashing += performance.now() - began;
       hashes += hit.hashes;
       if (hit.nonce === null) return true;
       const result = await post("/mining/work", { workID: t.workID, nonce: Number(hit.nonce) });
@@ -103,7 +105,9 @@ export function miner({ rpc, fetchImpl, to, log = console.log, batch = 1n << 20n
       let ok = false;
       try { ok = await round(start); start += batch; } catch (e) { say(`miner: ${e.message}`); }
       const now = Date.now();
-      if (now - since >= 60_000) { measured = Number(hashes) * 1000 / (now - since); hashes = 0n; since = now; log(`miner: ${Math.round(measured)} hashes per second`); }
+      // The machine's rate: hashes over the time spent hashing, not over the
+      // minute (an easy chain is mostly template fetches, not search).
+      if (now - since >= 60_000 && hashing > 0) { measured = Number(hashes) * 1000 / hashing; hashes = 0n; hashing = 0; since = now; log(`miner: ${Math.round(measured)} hashes per second`); }
       if (!stopped && !ok) await sleep(idle);
     }
   })();

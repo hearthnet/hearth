@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Hearth's seller in one command:
 //
-//   npx @hearthnet/hearth sell [--throughput 6000] [--storage 600] [--period 1d] [--hashrate <n>]
+//   npx @hearthnet/hearth sell [--throughput 60] [--storage 6] [--period 1d] [--hashrate <n>]
 //
 // finds the Lattice node beside it (5.1.0 or newer), makes the seller's key
 // if there is none, and runs host/sell-hosting.mjs in the foreground, which

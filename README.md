@@ -29,7 +29,7 @@ blocks it makes pay its sponsor's key, 1,000 coin a market block.
 You need Node.js 22 or later, on macOS (Apple silicon) or Linux (x86-64):
 
 ```
-npx @hearthnet/hearth sell        # [--throughput 6000] [--storage 600] [--period 1d] [--hashrate <hashes/s>] [--id 1]
+npx @hearthnet/hearth sell        # [--throughput 60] [--storage 6] [--period 1d] [--hashrate <hashes/s>] [--id 1]
 ```
 
 Hearth runs the node it sells from. The first time, it downloads a pinned
@@ -66,8 +66,8 @@ which the seller writes and changes in place:
 
 ```
 hashrate 5000000      hashes per second it mines with, over every chain it hosts
-throughput 6000       coin per kB/s of block capacity (maxBlockSize / targetBlockTime), per period
-storage 600           coin per kB of maxStateGrowth, per period
+throughput 60         coin per kB/s of block capacity (maxBlockSize / targetBlockTime), per period
+storage 6             coin per kB of maxStateGrowth, per period
 period 1440           market blocks a period lasts
 blocks bafyrei...     the address its blocks pay: its sponsor's key
 ```
@@ -76,9 +76,10 @@ blocks bafyrei...     the address its blocks pay: its sponsor's key
 blocks, or hours, days or weeks (`12h`, `1d`, `2w`) at the market's block
 time. The hash rate is `--hashrate`, else what its miner measured over its
 first minute: the offer waits for it. A buyer pays for every chain on its
-chain's path, Nexus included, each by its own spec: a small chain (20 kB
-blocks every 30 s, 10 kB of state growth) costs 4,000 + 6,000 = 10,000 a
-day at the defaults. The seller rewrites the offer whenever the flags'
+chain's path, Nexus included, each by its own spec: at the defaults a
+small chain (20 kB blocks every 30 s, 10 kB of state growth) costs 40 + 60
+= 100 a day itself, and its parents far more: under `Nexus/testnet` the
+whole path comes to about 25,000 a day. The seller rewrites the offer whenever the flags'
 terms or the address its blocks pay differ from what the market says (a
 measured hash rate is written once, not again as it wanders). An order
 asserts the offer's text unchanged, so an order priced at the old terms
@@ -343,7 +344,7 @@ Beside the node (loopback and its cookie):
 
 ```
 node host/sell-hosting.mjs --root /var/lib/lattice --market Nexus/testnet/hearth \
-  --key host.json [--throughput 6000] [--storage 600] [--period 1d] [--hashrate <n>] --lattice /usr/local/bin/lattice \
+  --key host.json [--throughput 60] [--storage 6] [--period 1d] [--hashrate <n>] --lattice /usr/local/bin/lattice \
   [--sponsor-bin lattice-sponsor] [--sponsor-port 8650] [--sponsor-url https://host.example/sponsor] [--storage-rate 10240]
 ```
 

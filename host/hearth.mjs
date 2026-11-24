@@ -17,7 +17,7 @@ export const DEFAULT_MARKET = "Nexus/testnet/hearth";
  * 4,000 + 6,000 = 10,000 a day, each chain on the path priced by its own
  * spec. The market pays 1,000 coin a block, a block a minute.
  */
-export const DEFAULT_TERMS = { throughput: "6000", storage: "600", period: "1d" };
+export const DEFAULT_TERMS = { throughput: "60", storage: "6", period: "1d" };
 /** Why a host sells, as `hearth sell` says when it makes the seller's key. */
 export const WHY_SELL = "You earn Hearth coin (the market's coin): buyers' orders pay the seller's key, and the blocks it makes pay its sponsor's key "
   + "(hearth sweep moves them to the seller's). Spend it on hosting from any seller on the market.";

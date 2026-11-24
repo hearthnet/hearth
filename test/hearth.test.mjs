@@ -28,8 +28,8 @@ test("--period is market blocks, or hours, days or weeks at the market's block t
 });
 
 test("the offer's terms from flags: prices per period, the period in market blocks, a hash rate only when given", () => {
-  assert.deepEqual(offerTerms({}), { throughput: 6000n, storage: 600n, period: 1440n, hashrate: undefined }, "the defaults, a day of one-minute blocks");
-  assert.deepEqual(DEFAULT_TERMS, { throughput: "6000", storage: "600", period: "1d" });
+  assert.deepEqual(offerTerms({}), { throughput: 60n, storage: 6n, period: 1440n, hashrate: undefined }, "the defaults, a day of one-minute blocks");
+  assert.deepEqual(DEFAULT_TERMS, { throughput: "60", storage: "6", period: "1d" });
   assert.deepEqual(offerTerms({ throughput: "0", storage: "7", period: "12h", hashrate: "5000000" }, 3000), { throughput: 0n, storage: 7n, period: 14400n, hashrate: 5000000n });
   for (const [flag, bad] of [["throughput", "-1"], ["throughput", "1.5"], ["storage", "x"], ["storage", "01"], ["hashrate", "0"], ["hashrate", "9007199254740992"], ["period", "1y"]]) {
     assert.throws(() => offerTerms({ [flag]: bad }), new RegExp(`--${flag}`), `${flag} ${bad}`);
@@ -367,7 +367,7 @@ test("every verb takes --help", async () => {
     assert.match(out, new RegExp(`^usage: hearth ${verb} `), verb);
   }
   const sellHelp = (await hearth(["sell", "-h"])).out;
-  assert.match(sellHelp, /--throughput 6000\] \[--storage 600\] \[--period 1d\] \[--hashrate <hashes\/s>\]/);
+  assert.match(sellHelp, /--throughput 60\] \[--storage 6\] \[--period 1d\] \[--hashrate <hashes\/s>\]/);
   assert.match(sellHelp, /--storage-budget 256M/);
   assert.match((await hearth(["status", "-h"])).out, /--sponsor-port 8650/);
 });
@@ -456,7 +456,7 @@ test("`hearth sell` alone sells at the default terms, and its first run says wha
     const first = await run();
     assert.equal(first.code, 0, first.out);
     assert.match(first.out, /You earn Hearth coin \(the market's coin\): buyers' orders pay the seller's key, and the blocks it makes pay its sponsor's key .*Spend it on hosting from any seller on the market\./);
-    assert.match(first.out, /offer 1: 6000 market coin per kB\/s of block capacity and 600 per kB of state growth, per 1d, for each chain on a buyer's path; the hash rate its miner measures/);
+    assert.match(first.out, /offer 1: 60 market coin per kB\/s of block capacity and 6 per kB of state growth, per 1d, for each chain on a buyer's path; the hash rate its miner measures/);
     const again = await run();
     assert.doesNotMatch(again.out, /You earn Hearth coin/, "said once, when the key is made");
   } finally { node.close(); }
