@@ -319,3 +319,12 @@ test("a reader that knows a path's genesis judges which order was first as one t
     assert.equal(v.get(y.key).kind, "taken", "y is never owed: x came first");
   }
 });
+
+test("an order taken by an earlier one takes none of its offer's chains", () => {
+  const ONE = { ...OFFER, capacity: 1n };
+  const x = order({ created: 200n }), rival = order({ buyer: B, created: 201n, payloadText: payload({ ...SPEC, initialReward: 11n }) });
+  const again = order({ buyer: C, created: 202n });  // the same chain as x
+  assert.deepEqual(verdicts([x, rival, again], { versions: offers(ONE) }), ["owed", "taken", "owed"]);
+  const ONE2 = { ...OFFER, capacity: 2n }, other = order({ buyer: C, path: "Nexus/testnet/y", created: 203n });
+  assert.deepEqual(verdicts([x, rival, other], { versions: offers(ONE2) }), ["owed", "taken", "owed"], "the rival did not fill the second chain");
+});

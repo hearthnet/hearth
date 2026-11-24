@@ -556,7 +556,8 @@ function soldPerOffer() {
   const counted = new Map(), seen = new Set();
   for (const o of market.orders) {
     const v = verdicts.get(o.key);
-    if (!v || v.kind === "void" || v.kind === "full") continue;
+    // As verdict.mjs counts: void, full and orders taken by an earlier order (`elsewhere` set) take no chain.
+    if (!v || v.kind === "void" || v.kind === "full" || v.elsewhere !== undefined) continue;
     const chain = `${o.host}/${o.id}\n${o.path}\n${o.payloadText}`;
     if (seen.has(chain)) continue;
     seen.add(chain);

@@ -69,6 +69,15 @@ export function judge({ sdk, height, versions, orders, renewals = [], genesis = 
       : !offer ? `no version of the offer was in force at market block ${o.created} (a version takes effect ${CREATED_WINDOW} blocks after it is written)`
       : voidReason(sdk, o, offer);
     if (reason) { verdicts.set(o.key, { kind: "void", reason, order: o.order }); continue; }
+    // The first order decides the path, from the orders alone: a genesis a
+    // reader knows never changes which order is first.
+    const first = firstAtPath.get(o.path);
+    if (first && first.payloadText !== o.payloadText) {
+      const elsewhere = first.host !== o.host;
+      verdicts.set(o.key, { kind: "taken", elsewhere, reason: `an earlier order for the path${elsewhere ? ", at another host," : " at this host"} named another payload`, order: o.order });
+      continue;
+    }
+    // Only an order that can win the path takes one of the offer's chains.
     const chain = `${o.path}\n${o.payloadText}`;
     const sold = counted.get(`${o.host}/${o.id}`) ?? new Set();
     counted.set(`${o.host}/${o.id}`, sold);
@@ -76,14 +85,7 @@ export function judge({ sdk, height, versions, orders, renewals = [], genesis = 
       if (BigInt(sold.size) >= offer.capacity) { verdicts.set(o.key, { kind: "full", reason: `the offer had sold its ${offer.capacity} chains`, order: o.order }); continue; }
       sold.add(chain);
     }
-    // The first order decides the path, from the orders alone: a genesis a
-    // reader knows never changes which order is first.
-    const first = firstAtPath.get(o.path) ?? (firstAtPath.set(o.path, o), o);
-    if (first.payloadText !== o.payloadText) {
-      const elsewhere = first.host !== o.host;
-      verdicts.set(o.key, { kind: "taken", elsewhere, reason: `an earlier order for the path${elsewhere ? ", at another host," : " at this host"} named another payload`, order: o.order });
-      continue;
-    }
+    if (!first) firstAtPath.set(o.path, o);
     const facts = genesis.get(o.path);
     if (facts && !sameGenesis(sdk, facts, o.payload)) {
       verdicts.set(o.key, { kind: "taken", reason: "the path holds a genesis not built from this payload", order: o.order });
