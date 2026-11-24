@@ -1,6 +1,6 @@
 // The seller's sponsor: lattice-sponsor beside the node, paying fees for
 // clients who pay with proof-of-work shares and selling pins (kept until taken down) for
-// work, from its own key's float on each chain the node hosts. The pacer
+// work, from its own key's float on each chain the node hosts. The miner
 // pays that key the blocks it makes, which keeps the float topped up.
 import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
@@ -19,9 +19,9 @@ export function sponsorBinary(bin = "lattice-sponsor", PATH = process.env.PATH) 
  * lattice-sponsor's arguments: the node's loopback API and cookie, its key,
  * where it listens (every interface only when the seller advertises a public
  * URL and no proxy beside it serves that URL: `loopback`), and storage for work at `storageRate` bytes per market coin, paid in
- * coin to the seller (`payTo`, as storage offers say). Its `GET /terms`
- * names its own address (`address`), the one the offer's blocks pay, which
- * is how a buyer sees the sponsor is this host's. It pins at most
+ * coin to the seller (`payTo`). Its `GET /terms` names its own address
+ * (`address`), the one the offer's blocks pay, which is how a buyer sees
+ * the sponsor is this host's. It pins at most
  * `storageBudget` bytes in all.
  */
 export function sponsorArgs({ node, cookieFile, key, port, publicURL, market, storageRate, storageFile, storageBudget, payTo, loopback = false }) {

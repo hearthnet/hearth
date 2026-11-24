@@ -1,8 +1,8 @@
 // `hearth sell`: the offer from flags, the seller's key, the chains it makes
-// its node host, which hosts the page sells, and the service it installs.
+// its node host, and the service it installs.
 import assert from "node:assert/strict";
 import { execFile, spawn, spawnSync } from "node:child_process";
-import { chmodSync, symlinkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from "node:fs";
+import { chmodSync, symlinkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -10,10 +10,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import * as sdk from "../vendor/lattice-sdk.js";
 import { keyFileJSON } from "../client/tx.mjs";
-import { hostVouches, standing } from "../client/vouch.mjs";
-import { formatOffer, offerText } from "../client/records.mjs";
-import { DEFAULT_MARKET, DEFAULT_TERMS, currentOffer, ensureKey, fundingMessage, fundingStep, growthLine, liveOffers, offerFromFlags, parsePrice, parseSize, periodBlocks, sellerChains,
-  serviceUnits, worstGrowth } from "../host/hearth.mjs";
+import { DEFAULT_MARKET, DEFAULT_TERMS, ensureKey, fundingMessage, fundingStep, offerTerms, parseSize, periodBlocks, serviceUnits } from "../host/hearth.mjs";
 import { earnings, report } from "../host/status.mjs";
 
 
@@ -21,35 +18,22 @@ const BIN = join(dirname(fileURLToPath(import.meta.url)), "../bin/hearth.mjs");
 const HOST = sdk.accountFromPrivateKey(new Uint8Array(32).fill(1)).address;
 const temp = () => mkdtempSync(join(tmpdir(), "hearth-"));
 
-test("--price is coin per market blocks, or per hour, day or week at the market's block time", () => {
-  assert.deepEqual(parsePrice("100/day"), { price: 100n, period: "day" });
-  assert.deepEqual(parsePrice("7/1440"), { price: 7n, period: 1440n });
-  assert.throws(() => offerFromFlags({ price: "1/day", chains: "9007199254740992" }), /--chains/);
-  for (const bad of ["100", "0/day", "100/month", "100/0", "-1/day", "1.5/day", "9007199254740992/day", "1/9007199254740992", undefined]) assert.throws(() => parsePrice(bad), /--price/, String(bad));
-  assert.deepEqual(parsePrice("9007199254740991/day").price, 9007199254740991n, "the largest exact price");
-  assert.equal(periodBlocks("day", "60000"), 1440n, "a day of one-minute blocks");
-  assert.equal(periodBlocks("hour", 5000n), 720n);
-  assert.equal(periodBlocks("week", "60000"), 10080n);
-  assert.equal(periodBlocks("hour", "7200000"), 1n, "never under one block");
-  assert.equal(periodBlocks(1440n, "1"), 1440n, "blocks stay blocks");
+test("--period is market blocks, or hours, days or weeks at the market's block time", () => {
+  assert.equal(periodBlocks("1d", "60000"), 1440n, "a day of one-minute blocks");
+  assert.equal(periodBlocks("1h", 5000n), 720n);
+  assert.equal(periodBlocks("2w", "60000"), 20160n);
+  assert.equal(periodBlocks("1h", "7200000"), 1n, "never under one block");
+  assert.equal(periodBlocks("1440", "1"), 1440n, "blocks stay blocks");
+  for (const bad of ["0", "1m", "day", "1.5d", "-1d", "d", "9007199254740992", "", undefined]) assert.throws(() => periodBlocks(bad, 60000), /--period/, String(bad));
 });
 
-test("the same flags make the same offer, with small chains' limits", () => {
-  const offer = offerFromFlags({ price: "100/day" });
-  assert.deepEqual({ ...offer, id: undefined }, { id: undefined, parent: "Nexus", price: 100, period: "day", capacity: 10, maxBlockSize: 20000,
-    maxStateGrowth: 10000, minTargetBlockTime: 30000, maxNumberOfTransactionsPerBlock: 100, modules: "any" });
-  assert.equal(offerFromFlags({ price: "100/day" }).id, offer.id, "written once: the same id again");
-  assert.notEqual(offerFromFlags({ price: "100/day", chains: "5" }).id, offer.id);
-  assert.equal(offerFromFlags({ price: "100/day", id: "mine" }).id, "mine");
-  assert.deepEqual([offerFromFlags({ price: "1/1", parent: "Nexus/x", chains: "3" })].map((o) => [o.parent, o.capacity]), [["Nexus/x", 3]]);
-});
-
-test("the default terms bound what one order can add to the host's disk in a day", () => {
-  assert.deepEqual(worstGrowth(DEFAULT_TERMS), { blocks: 2880, perChain: 86_400_000, all: 864_000_000 }, "30 s blocks of 20 kB adding 10 kB of state, 10 chains");
-  assert.match(growthLine(DEFAULT_TERMS), /^worst case, each chain sold adds up to 86\.4 MB a day to this node's disk \(2880 blocks of 20\.0 kB, each adding 10\.0 kB of state\), 864\.0 MB a day for all 10/);
-  const before = { capacity: 50, maxBlockSize: 1000000, maxStateGrowth: 1000000, minTargetBlockTime: 5000 };
-  assert.equal(worstGrowth(before).perChain, 34_560_000_000, "the old terms: 34.6 GB a day per chain");
-  assert.ok(worstGrowth(before).perChain / worstGrowth(DEFAULT_TERMS).perChain >= 400);
+test("the offer's terms from flags: prices per period, the period in market blocks, a hash rate only when given", () => {
+  assert.deepEqual(offerTerms({}), { throughput: 6000n, storage: 600n, period: 1440n, hashrate: undefined }, "the defaults, a day of one-minute blocks");
+  assert.deepEqual(DEFAULT_TERMS, { throughput: "6000", storage: "600", period: "1d" });
+  assert.deepEqual(offerTerms({ throughput: "0", storage: "7", period: "12h", hashrate: "5000000" }, 3000), { throughput: 0n, storage: 7n, period: 14400n, hashrate: 5000000n });
+  for (const [flag, bad] of [["throughput", "-1"], ["throughput", "1.5"], ["storage", "x"], ["storage", "01"], ["hashrate", "0"], ["hashrate", "9007199254740992"], ["period", "1y"]]) {
+    assert.throws(() => offerTerms({ [flag]: bad }), new RegExp(`--${flag}`), `${flag} ${bad}`);
+  }
 });
 
 test("--storage-budget is bytes, or K, M, G or T (binary)", () => {
@@ -60,47 +44,40 @@ test("--storage-budget is bytes, or K, M, G or T (binary)", () => {
   for (const bad of ["0", "-1M", "1.5G", "1P", "lots", "", undefined]) assert.throws(() => parseSize(bad, "--storage-budget"), /--storage-budget is a size/, String(bad));
 });
 
-test("the seller's first writes are funded from the sponsor key's block rewards, before lattice-sponsor signs with it", () => {
-  const at = { fee: 1n, chain: "Nexus/testnet/lodger", address: HOST, interval: "30" };
-  assert.deepEqual(fundingStep({ ...at, seller: 3n, sponsor: 0n, canMove: true }), { ready: true });
-  assert.deepEqual(fundingStep({ ...at, seller: 0n, sponsor: 5000n, canMove: true }), { move: 4n }, "offer, url, storage offer and a close");
-  assert.deepEqual(fundingStep({ ...at, seller: 1n, sponsor: 4n, canMove: true }), { move: 3n });
+test("the seller's offer and its close are funded from the sponsor key's block rewards, before lattice-sponsor signs with it", () => {
+  const at = { fee: 1n, chain: "Nexus/testnet/hearth", address: HOST, interval: "30" };
+  assert.deepEqual(fundingStep({ ...at, seller: 2n, sponsor: 0n, canMove: true }), { ready: true });
+  assert.deepEqual(fundingStep({ ...at, seller: 0n, sponsor: 5000n, canMove: true }), { move: 2n }, "the offer and its close");
+  assert.deepEqual(fundingStep({ ...at, seller: 1n, sponsor: 2n, canMove: true }), { move: 1n });
   const waiting = fundingStep({ ...at, seller: 0n, sponsor: 2n, canMove: true }).wait;
-  assert.match(waiting, /waiting for block rewards\. This seller's blocks pay the sponsor's key \(it holds 2\), and the seller moves 4 from it once it holds 5\./);
-  assert.match(waiting, new RegExp(`Not to wait, send 3 coin on Nexus/testnet/lodger to ${HOST}, or earn it with this machine: hearth earn`));
+  assert.match(waiting, /waiting for block rewards\. This seller's blocks pay the sponsor's key \(it holds 2\), and the seller moves 2 from it once it holds 3\./);
+  assert.match(waiting, new RegExp(`Not to wait, send 2 coin on Nexus/testnet/hearth to ${HOST}, or earn it with this machine: hearth earn`));
   assert.match(fundingStep({ ...at, seller: 0n, sponsor: 5000n, canMove: true, otherSponsor: "8650" }).wait,
-    /^a sponsor already answers on port 8650 and may sign with the sponsor's key, so the seller moves nothing from it: stop that sponsor, or send 3 coin/,
+    /^a sponsor already answers on port 8650 and may sign with the sponsor's key, so the seller moves nothing from it: stop that sponsor, or send 2 coin/,
     "a sponsor on the port may sign with the same key: nothing moved");
   const remote = fundingStep({ ...at, seller: 0n, sponsor: 5000n, canMove: false }).wait;
-  assert.match(remote, /^Send at least 3 coin .* hearth sweep moves them here while no sponsor signs with it\.$/, "a sponsor signs with the key already, or --node: never moved here");
+  assert.match(remote, /^Send at least 2 coin .* hearth sweep moves them here while no sponsor signs with it\.$/, "a sponsor signs with the key already, or --node: never moved here");
 });
 
 test("a pass reports both balances, what buyers paid and what is owed, and storage against the budget", () => {
-  const o = (created, paid, path) => ({ key: `order/${path}`, created, paid, path });
-  const lines = report({ market: "Nexus/testnet/lodger", height: 100n, seller: { address: "S", balance: 297n }, sponsor: { address: "P", balance: 52000n },
-    mine: [o(10n, 100n, "Nexus/testnet/a"), o(95n, 200n, "Nexus/testnet/b")], renewals: [o(50n, 100n, "Nexus/testnet/a")], counts: { owed: 1, pending: 1 },
-    until: new Map([["Nexus/testnet/a", 3000n]]), earned: 200n, settling: 200n, storage: { budget: 256 * 2 ** 20, stored: 12 * 2 ** 20, held: 2 ** 20 } });
+  const lines = report({ market: "Nexus/testnet/hearth", height: 100n, seller: { address: "S", balance: 297n }, sponsor: { address: "P", balance: 52000n },
+    mine: [{}, {}, {}], counts: { owed: 1, renewal: 1, void: 1 }, until: new Map([["Nexus/testnet/a", 3000n]]), earned: 200n,
+    storage: { budget: 256 * 2 ** 20, stored: 12 * 2 ** 20, held: 2 ** 20 } });
   assert.deepEqual(lines, [
-    "market Nexus/testnet/lodger at block 100: the seller's key S holds 297; the sponsor's key P holds 52000 (its block rewards)",
-    '2 orders {"owed":1,"pending":1} and 1 renewals: earned 200 coin from buyers, 200 more settling',
+    "market Nexus/testnet/hearth at block 100: the seller's key S holds 297; the sponsor's key P holds 52000 (its block rewards)",
+    '3 orders and renewals {"owed":1,"renewal":1,"void":1}: earned 200 coin from buyers',
     "owes hosting to Nexus/testnet/a (to market block 3000)",
     "storage pinned by the sponsor: 12.0 MiB of its 256.0 MiB budget, 1.0 MiB held for uploads being paid, 243.0 MiB left",
   ]);
-  assert.deepEqual(report({ market: "M", height: 1n, seller: { address: "S", balance: 0n }, sponsor: { address: "P", balance: 0n }, mine: [], renewals: [], counts: {},
-    until: new Map(), earned: 0n, settling: 0n }).slice(2), ["owes hosting to no chain now", "storage: no sponsor reporting it on the sponsor port (not running yet, or older than its storage report)"]);
+  assert.deepEqual(report({ market: "M", height: 1n, seller: { address: "S", balance: 0n }, sponsor: { address: "P", balance: 0n }, mine: [], counts: {},
+    until: new Map(), earned: 0n }).slice(2), ["owes hosting to no chain now", "storage: no sponsor reporting it on the sponsor port (not running yet, or older than its storage report)"]);
 });
 
-test("earned counts only other buyers' payments for hosting owed: not void orders, the seller's own, or renewals after a close", () => {
-  const B = "buyer", A = "Nexus/testnet/a", V = "Nexus/testnet/v", S = "Nexus/testnet/s", N = "Nexus/testnet/n";
-  const ord = (key, created, paid, path, buyer = B) => ({ key, host: HOST, id: "o", created, paid, path, buyer });
-  const ren = (created, paid, path, payer = B) => ({ key: `r${created}`, host: HOST, id: "o", created, paid, path, payer });
-  // On sale from block 10, closed at block 200 (in force from 210).
-  const versions = new Map([[`${HOST}/o`, [offerAt({ created: 10n, until: 5000n }), offerAt({ created: 200n, until: 200n })]]]);
-  const mine = [ord("a", 30n, 100n, A), ord("v", 40n, 300n, V), ord("s", 50n, 400n, S, HOST), ord("n", 295n, 500n, N)];
-  const verdicts = new Map([["a", { kind: "owed" }], ["v", { kind: "void" }], ["s", { kind: "owed" }], ["n", { kind: "pending" }]]);
-  const renewals = [ren(100n, 20n, A), ren(250n, 50n, A), ren(120n, 70n, A, HOST), ren(130n, 9n, V), ren(296n, 1n, A)];
-  assert.deepEqual(earnings({ m: { height: 300n, versions }, self: HOST, mine, renewals, verdicts }), { earned: 120n, settling: 501n },
-    "a's order and its renewal before the close; settling: n's order and the newest renewal");
+test("earned counts only other buyers' payments for hosting owed and its renewals: not void orders or the seller's own", () => {
+  const o = (key, paid, payer = "buyer") => ({ key, paid, payer });
+  const mine = [o("a", 100n), o("r", 20n), o("v", 300n), o("s", 400n, HOST), o("u", 7n)];
+  const verdicts = new Map([["a", { kind: "owed" }], ["r", { kind: "renewal" }], ["v", { kind: "void" }], ["s", { kind: "owed" }], ["u", { kind: "unpriced" }]]);
+  assert.equal(earnings({ self: HOST, mine, verdicts }), 120n);
 });
 
 test("the seller's key is made once, mode 0600, as `lattice key generate` writes it", () => {
@@ -116,47 +93,11 @@ test("the seller's key is made once, mode 0600, as `lattice key generate` writes
   assert.throws(() => ensureKey(sdk, path, keyFileJSON), /chmod 600/, "a key others can read is refused");
 });
 
-const offerAt = (o) => offerText(o.created, formatOffer({ price: 1n, period: 1n, capacity: 1n, maxBlockSize: 1n, maxStateGrowth: 1n,
-  minTargetBlockTime: 1n, maxNumberOfTransactionsPerBlock: 1n, modules: "any", ...o }));
-
-test("the fragment lists the market, its offers' parents, and owed chains only under parents someone chose", () => {
-  const M = "Nexus/testnet/lodger";
-  assert.deepEqual(sellerChains({ market: M, parents: ["Nexus/testnet"] }), ["Nexus/testnet", M]);
-  assert.deepEqual(sellerChains({ market: M, parents: ["Nexus/testnet"], owed: ["Nexus/testnet/app", "Nexus/other/app", "Nexus/kept/app", "Nexus/top"], others: new Set(["Nexus/kept"]) }),
-    ["Nexus/testnet", "Nexus/top", "Nexus/kept/app", "Nexus/testnet/app", M]);
-  assert.deepEqual(sellerChains({ market: M, owed: ["Nexus/testnet/app"] }), [M], "no offer yet: no parent chosen");
-});
-
-test("a chain owed on an older offer stays in the fragment after the flags change", () => {
-  const M = "Nexus/testnet/lodger", OTHER = sdk.accountFromPrivateKey(new Uint8Array(32).fill(2)).address;
-  const offers = new Map([
-    [`${HOST}/old`, offerAt({ created: 10n, parent: "Nexus/old", until: 500n })],
-    [`${HOST}/ended`, offerAt({ created: 10n, parent: "Nexus/ended", until: 100n })],
-    [`${OTHER}/theirs`, offerAt({ created: 10n, parent: "Nexus/theirs", until: 500n })],
-  ]);
-  const live = liveOffers(offers, HOST, 200n);
-  assert.deepEqual(live, [{ id: "old", parent: "Nexus/old", until: 500n }], "only this key's offers still on sale");
-  // The flags now sell under Nexus/new; Nexus/old/app was sold on the old offer.
-  const parents = ["Nexus/new", ...live.map((o) => o.parent)];
-  assert.deepEqual(sellerChains({ market: M, parents, owed: ["Nexus/old/app", "Nexus/new/app", "Nexus/ended/app"] }),
-    ["Nexus/new", "Nexus/old", "Nexus/new/app", "Nexus/old/app", M]);
-});
-
 test("funding waits until the key holds the market coin its writes cost", () => {
   const need = (balance) => ({ chain: "Nexus/testnet/lodger", amount: 3n, balance });
   assert.equal(fundingMessage({ address: HOST, need: need(2n), interval: "30" }),
     `Send at least 3 coin on Nexus/testnet/lodger to ${HOST}, from any account that holds some, or earn it with this machine: hearth earn --sponsor <url>; this seller waits and checks again every 30 s.`);
   assert.equal(fundingMessage({ address: HOST, need: need(3n), interval: "30" }), undefined, "covered: it writes");
-});
-
-const web = (pages) => async (url) => (url in pages ? { ok: true, json: async () => pages[url] } : { ok: false, status: 404 });
-
-test("a host with no url record sells under its key; one whose url fails stays hidden", async () => {
-  const listed = web({ "https://host.example/.well-known/lattice.json": { sellers: [HOST] } });
-  assert.equal(standing(await hostVouches({ host: HOST, urlValue: "https://host.example", fetchImpl: listed })), "verified");
-  assert.equal(standing(await hostVouches({ host: HOST, urlValue: undefined, fetchImpl: listed })), "key-only");
-  assert.equal(standing(await hostVouches({ host: HOST, urlValue: "https://host.example", fetchImpl: web({}) })), undefined, "names a domain that does not list it");
-  assert.equal(standing(await hostVouches({ host: HOST, urlValue: "not a url", fetchImpl: listed })), undefined, "a malformed url record");
 });
 
 test("--install writes units for the node and the seller, the seller after the node, and only says how to load them", () => {
@@ -246,9 +187,9 @@ async function freshNode({ version = "4.0.0+dev", old = false, chains = {}, bala
   return { root, puts, posted, lattice, sponsor, sponsorRan, close: () => server.close() };
 }
 const hearth = (args, env = {}) => new Promise((ok) => execFile(process.execPath, [BIN, ...args], { env: { ...process.env, ...env } }, (error, stdout, stderr) => ok({ code: error?.code ?? 0, out: stdout + stderr })));
-const sell = (node, more = [], env) => hearth(["sell", "--price", "100/day", "--root", node.root, "--once", "--lattice", node.lattice, "--sponsor-bin", node.sponsor, ...more], env);
+const sell = (node, more = [], env) => hearth(["sell", "--throughput", "100", "--root", node.root, "--once", "--lattice", node.lattice, "--sponsor-bin", node.sponsor, ...more], env);
 
-test("`hearth sell --price` beside a fresh node: makes the key, and has the node host the market and the parent", async () => {
+test("`hearth sell` beside a fresh node: makes the key, and has the node host the market and the chain above it", async () => {
   const node = await freshNode();
   try {
     const { code, out } = await sell(node);
@@ -259,13 +200,8 @@ test("`hearth sell --price` beside a fresh node: makes the key, and has the node
     assert.ok(out.includes(address) && !out.includes(privateKey), "the address, never the private key");
     assert.match(out, new RegExp(`waiting for the node to host ${DEFAULT_MARKET}`));
     assert.doesNotMatch(out, /HTTP 404/, "no error while the market is not hosted yet");
-    assert.deepEqual(node.puts, [{ body: { hostedChains: [DEFAULT_MARKET] }, condition: "*" }]);
-    const first = join(node.root, `hearth/${offerFromFlags({ price: "100/day" }).id}.json`);
-    assert.equal(JSON.parse(readFileSync(first, "utf8")).period, "day");
-    const again = await hearth(["sell", "--price", "200/day", "--root", node.root, "--once", "--lattice", node.lattice, "--sponsor-bin", node.sponsor]);
-    assert.equal(again.code, 0, again.out);
-    assert.equal(JSON.parse(readFileSync(first, "utf8")).price, 100, "other flags leave the first offer's file");
-    assert.equal(JSON.parse(readFileSync(join(node.root, `hearth/${offerFromFlags({ price: "200/day" }).id}.json`), "utf8")).price, 200, "and write their own");
+    assert.deepEqual(node.puts, [{ body: { hostedChains: ["Nexus/testnet", DEFAULT_MARKET] }, condition: "*" }]);
+    assert.deepEqual(readdirSync(join(node.root, "hearth")).sort(), ["seller.json", "sponsor.json"], "no offer file: the offer is its flags");
   } finally { node.close(); }
 });
 
@@ -279,7 +215,7 @@ test("`hearth sell` beside a node older than 4.0.1 says so and stops", async () 
     // A 4.0.0 `lattice` has no `config`: lattice.json finds the node, only to say this.
     const old = join(temp(), "lattice");
     writeFileSync(old, "#!/bin/sh\necho \"Error: Unexpected argument 'config'\" >&2\nexit 64\n", { mode: 0o755 });
-    const viaFile = await hearth(["sell", "--price", "100/day", "--root", node.root, "--once", "--lattice", old, "--sponsor-bin", node.sponsor]);
+    const viaFile = await hearth(["sell", "--root", node.root, "--once", "--lattice", old, "--sponsor-bin", node.sponsor]);
     assert.match(viaFile.out, /Hearth needs node 5\.0\.0 or newer \(you have 4\.0\.0: its GET \/config does not say which layer lists each chain\)/);
     const burnt = await hearth(["burn", "5", "--chain", DEFAULT_MARKET, "--root", node.root, "--lattice", node.lattice]);
     assert.equal(burnt.code, 2);
@@ -294,13 +230,13 @@ test("while the node syncs the market, the seller says how far it is and asks fo
     assert.equal(code, 0, out);
     assert.match(out, /syncing market: 5 \/ 10/);
     assert.doesNotMatch(out, /Send at least|send coin|hearth earn/i);
-    assert.deepEqual(node.puts.map((p) => p.body.hostedChains), [[DEFAULT_MARKET]], "it still has the node host the market");
+    assert.deepEqual(node.puts.map((p) => p.body.hostedChains), [["Nexus/testnet", DEFAULT_MARKET]], "it still has the node host the market");
   } finally { node.close(); }
 });
 
 /** `hearth sell` running until the sponsor has started: what the sponsor was run with, then the seller stopped as `hearth stop` stops it. */
 async function sellUntilSponsor(node, more = []) {
-  const child = spawn(process.execPath, [BIN, "sell", "--price", "100/day", "--root", node.root, "--lattice", node.lattice, "--sponsor-bin", node.sponsor, "--interval", "1", ...more]);
+  const child = spawn(process.execPath, [BIN, "sell", "--root", node.root, "--lattice", node.lattice, "--sponsor-bin", node.sponsor, "--interval", "1", ...more]);
   let out = "";
   child.stdout.on("data", (d) => (out += d));
   child.stderr.on("data", (d) => (out += d));
@@ -335,7 +271,7 @@ test("`hearth sell` runs lattice-sponsor beside the node with a key of its own, 
     assert.ok(ran.includes("--port 8650") && ran.includes("--host 127.0.0.1"), ran);
     assert.ok(ran.includes(`--sell-storage --storage-rate ${DEFAULT_MARKET}=10240`) && ran.includes(`--pay-to ${seller}`) && !ran.includes("--funds"), ran);
     assert.ok(ran.includes("--storage-budget 268435456"), `a budget of 256 MiB unless --storage-budget says: ${ran}`);
-    assert.match(out, /no --sponsor-url: the offer names no sponsor/);
+    assert.match(out, /sponsor on 127\.0\.0\.1:8650 only \(no --sponsor-url\)/);
     assert.equal(sponsorAlive, false, "the sponsor stops with the seller");
     assert.equal(pidLeft, false);
     const open = await sellUntilSponsor(node, ["--sponsor-url", "https://host.example/sponsor", "--sponsor-port", "9650", "--storage-rate", "4096", "--storage-budget", "1G"]);
@@ -348,7 +284,7 @@ test("`hearth sell` runs lattice-sponsor beside the node with a key of its own, 
 test("a missing --sponsor-bin says where to get one; with none on PATH, Hearth uses its own; --mine is gone", async () => {
   const node = await freshNode();
   try {
-    const { code, out } = await hearth(["sell", "--price", "100/day", "--root", node.root, "--once", "--lattice", node.lattice, "--sponsor-bin", "/nonexistent/lattice-sponsor"]);
+    const { code, out } = await hearth(["sell", "--root", node.root, "--once", "--lattice", node.lattice, "--sponsor-bin", "/nonexistent/lattice-sponsor"]);
     assert.equal(code, 2);
     assert.match(out, /no sponsor at \/nonexistent\/lattice-sponsor: .*give --sponsor-bin <path> to one, or leave --sponsor-bin out and Hearth runs its own/);
     // None on PATH: Hearth's own, installed under ~/.hearth (here already there, so nothing downloads).
@@ -358,7 +294,7 @@ test("a missing --sponsor-bin says where to get one; with none on PATH, Hearth u
       writeFileSync(join(home, ".hearth/bin", bin), "#!/bin/sh\nexit 1\n");
       chmodSync(join(home, ".hearth/bin", bin), 0o755);
     }
-    const own = await hearth(["sell", "--price", "100/day", "--root", node.root, "--once", "--lattice", node.lattice], { PATH: dirname(process.execPath), HOME: home });
+    const own = await hearth(["sell", "--root", node.root, "--once", "--lattice", node.lattice], { PATH: dirname(process.execPath), HOME: home });
     assert.doesNotMatch(own.out, /no lattice-sponsor/, own.out);
     const mine = await sell(node, ["--mine", "1TH/s"]);
     assert.equal(mine.code, 2);
@@ -375,7 +311,7 @@ test("`hearth sell --install` writes the node's and the seller's units for this 
   symlinkSync(process.execPath, join(bin, "node"));
   mkdirSync(join(node.root, "hearth"), { recursive: true });
   writeFileSync(join(node.root, "hearth/closing"), "closed before\n");
-  const { code, out } = await hearth(["sell", "--price", "100/day", "--root", node.root, "--install", "--lattice", node.lattice, "--sponsor-bin", node.sponsor], { HOME: home, PATH: `${bin}:${process.env.PATH}` });
+  const { code, out } = await hearth(["sell", "--throughput", "100", "--period", "2d", "--root", node.root, "--install", "--lattice", node.lattice, "--sponsor-bin", node.sponsor], { HOME: home, PATH: `${bin}:${process.env.PATH}` });
   assert.equal(code, 0, out);
   const [nodeUnit, file] = process.platform === "darwin"
     ? [join(home, "Library/LaunchAgents/net.hearth.node.plist"), join(home, "Library/LaunchAgents/net.hearth.seller.plist")]
@@ -384,36 +320,27 @@ test("`hearth sell --install` writes the node's and the seller's units for this 
   assert.ok(readFileSync(nodeUnit, "utf8").includes(node.lattice) && readFileSync(nodeUnit, "utf8").includes(node.root), "the node: lattice up --root <root>");
   const unit = readFileSync(file, "utf8");
   assert.ok(unit.includes(join(bin, "node")) && !unit.includes(process.execPath), "the node on PATH, not this process's resolved path");
-  assert.ok(unit.includes(join(node.root, `hearth/${offerFromFlags({ price: "100/day" }).id}.json`)) && unit.includes(node.sponsor));
+  assert.ok(["--throughput", "100", "--period", "2d", node.sponsor].every((w) => unit.includes(w)), "the offer's flags");
   assert.ok(unit.includes("--resume"), "a service restart never reopens a closed offer");
   assert.ok(!unit.includes("--public") && !unit.includes("--sponsor-loopback"), "a node of your own is not made public unless --public");
   // With --public, the service runs `hearth sell --public`, and every flag it carries is one hearth sell takes.
-  const pub = await hearth(["sell", "--price", "100/day", "--root", node.root, "--install", "--public", "--lattice", node.lattice, "--sponsor-bin", node.sponsor], { HOME: home, PATH: `${bin}:${process.env.PATH}` });
+  const pub = await hearth(["sell", "--root", node.root, "--install", "--public", "--lattice", node.lattice, "--sponsor-bin", node.sponsor], { HOME: home, PATH: `${bin}:${process.env.PATH}` });
   assert.equal(pub.code, 0, pub.out);
   const pubUnit = readFileSync(file, "utf8");
   assert.ok(pubUnit.includes("--public") && !pubUnit.includes("--sponsor-loopback"), pubUnit);
   const flags = [...pubUnit.matchAll(/--([a-z][a-z-]*)/g)].map((m) => m[1]);
   const accepted = readFileSync(new URL("../bin/hearth.mjs", import.meta.url), "utf8");
   for (const f of new Set(flags)) if (!["user", "now", "no-block"].includes(f)) assert.ok(accepted.includes(`"${f}"`) || accepted.includes(` ${f}: {`), `the service passes --${f}, which hearth sell must take`);
-  assert.ok(existsSync(join(node.root, "hearth/reopen")) && !existsSync(join(node.root, "hearth/closing")), "but installing puts the offer on sale: the service's next start writes it once");
+  assert.ok(existsSync(join(node.root, "hearth/reopen")) && !existsSync(join(node.root, "hearth/closing")), "but installing puts the offer on sale: the service's next start sells");
   assert.match(out, process.platform === "darwin" ? /launchctl bootstrap gui\/\$\(id -u\) .*net\.hearth\.node\.plist && launchctl bootstrap/ : /systemctl --user enable --now hearth-node.service hearth.service/);
 });
-
-test("hosting goes by the offer as written on the market, not the local file", () => {
-  const file = { id: "o", parent: "Nexus/edited" };
-  assert.deepEqual(currentOffer({ self: HOST, id: "o", file }), { parent: "Nexus/edited" }, "not written yet: the file");
-  const offers = new Map([[`${HOST}/o`, offerAt({ created: 10n, parent: "Nexus/testnet", until: 500n })]]);
-  assert.deepEqual(currentOffer({ offers, self: HOST, id: "o", file }), { parent: "Nexus/testnet" });
-  assert.equal(currentOffer({ offers: new Map(), self: HOST, id: "o" }), undefined);
-});
-
 
 test("a `lattice` that prints no JSON fails the pass, which is logged, not the process", async () => {
   const node = await freshNode();
   try {
     const lattice = join(temp(), "lattice");
     writeFileSync(lattice, "#!/bin/sh\necho 'not json'\n", { mode: 0o755 });
-    const { code, out } = await hearth(["sell", "--price", "100/day", "--root", node.root, "--once", "--lattice", lattice, "--sponsor-bin", node.sponsor]);
+    const { code, out } = await hearth(["sell", "--root", node.root, "--once", "--lattice", lattice, "--sponsor-bin", node.sponsor]);
     assert.equal(code, 0, out);
     assert.match(out, /pass failed: .*config get rpc/);
   } finally { node.close(); }
@@ -422,7 +349,7 @@ test("a `lattice` that prints no JSON fails the pass, which is logged, not the p
 test("an unfunded seller starts no lattice-sponsor: the sponsor's key is its own to move the first fees from", async () => {
   const node = await freshNode({ chains: SYNCED, balance: () => 0n });
   try {
-    const child = spawn(process.execPath, [BIN, "sell", "--price", "100/day", "--root", node.root, "--lattice", node.lattice, "--sponsor-bin", node.sponsor, "--interval", "1"]);
+    const child = spawn(process.execPath, [BIN, "sell", "--root", node.root, "--lattice", node.lattice, "--sponsor-bin", node.sponsor, "--interval", "1"]);
     let out = "";
     child.stdout.on("data", (d) => (out += d));
     child.stderr.on("data", (d) => (out += d));
@@ -430,7 +357,6 @@ test("an unfunded seller starts no lattice-sponsor: the sponsor's key is its own
     child.kill("SIGTERM");
     await new Promise((ok) => child.on("exit", ok));
     assert.equal(existsSync(node.sponsorRan), false, out);
-    assert.match(out, /worst case, each chain sold adds up to 86\.4 MB a day/, "the offer's worst case, before anything is on sale");
   } finally { node.close(); }
 });
 
@@ -440,19 +366,18 @@ test("every verb takes --help", async () => {
     assert.equal(code, 0, `${verb}: ${out}`);
     assert.match(out, new RegExp(`^usage: hearth ${verb} `), verb);
   }
-  assert.match((await hearth(["sell", "--price", "100/day", "-h"])).out, /--storage-budget 256M/);
+  const sellHelp = (await hearth(["sell", "-h"])).out;
+  assert.match(sellHelp, /--throughput 6000\] \[--storage 600\] \[--period 1d\] \[--hashrate <hashes\/s>\]/);
+  assert.match(sellHelp, /--storage-budget 256M/);
   assert.match((await hearth(["status", "-h"])).out, /--sponsor-port 8650/);
 });
 
 test("a bad flag is refused before `hearth sell` writes anything", async () => {
   const node = await freshNode();
-  const badStorage = join(temp(), "storage.json"), badJSON = join(temp(), "storage.json");
-  writeFileSync(badStorage, JSON.stringify({ id: "files", sponsor: "http://host.example", bytesPerCoin: 10240, capacity: 1000 }));
-  writeFileSync(badJSON, "{ not json");
   try {
-    for (const bad of [["--price", "100/dya"], ["--price", "100/day", "--storage-budget", "lots"], ["--price", "100/day", "--sponsor-url", "http://host.example"],
-      ["--price", "100/day", "--interval", "0"], ["--price", "100/day", "--burn", "x"], ["--price", "100/day", "--storage-rate", "1.5"], ["--offer", "/nonexistent/offer.json"],
-      ["--parent", "testnet/app"], ["--parent", "Nexus//x"], ["--storage-offer", badStorage], ["--storage-offer", badJSON]]) {
+    for (const bad of [["--throughput", "x"], ["--storage", "-1"], ["--period", "1m"], ["--period", "0"], ["--hashrate", "0"], ["--id", "a/b"], ["--storage-budget", "lots"],
+      ["--sponsor-url", "http://host.example"], ["--interval", "0"], ["--burn", "x"], ["--storage-rate", "1.5"], ["--price", "100/day"], ["--url", "https://host.example"],
+      ["--offer", "offer.json"], ["--parent", "Nexus"], ["--storage-offer", "storage.json"]]) {
       const { code, out } = await hearth(["sell", ...bad, "--root", node.root, "--once", "--lattice", node.lattice, "--sponsor-bin", node.sponsor]);
       assert.equal(code, 2, `${bad.join(" ")}: ${out}`);
       assert.doesNotMatch(out, /made the seller's key/, bad.join(" "));
@@ -464,7 +389,7 @@ test("a bad flag is refused before `hearth sell` writes anything", async () => {
 
 test("--root where no node lives says so and exits", async () => {
   const empty = temp();
-  for (const verb of [["sell", "--price", "100/day"], ["status"], ["stop"], ["sweep"]]) {
+  for (const verb of [["sell"], ["status"], ["stop"], ["sweep"]]) {
     const { code, out } = await hearth([...verb, "--root", empty]);
     assert.equal(code, 2, out);
     assert.equal(out.trim(), `hearth: no node at ${empty}: give the root of a node, or --node with --token-file, or neither and Hearth runs its own`);
@@ -507,7 +432,7 @@ test("`hearth unpin <cid>` takes a file down on the sponsor beside the node, wit
   assert.match(none.out, new RegExp(`no sponsor answers on 127\\.0\\.0\\.1:${port}: unpin while the seller \\(and its sponsor\\) runs`));
 });
 
-test("`hearth sweep` while the seller runs says how to pause it without closing its offers", async () => {
+test("`hearth sweep` while the seller runs says how to pause it without closing its offer", async () => {
   const node = await freshNode();
   // A process whose command line names sell-hosting.mjs, as the seller's does.
   const seller = spawn(process.execPath, ["-e", "setTimeout(() => {}, 20000)", "sell-hosting.mjs"]);
@@ -520,23 +445,20 @@ test("`hearth sweep` while the seller runs says how to pause it without closing 
     assert.equal(code, 2, out);
     assert.match(out, new RegExp(`the seller \\(pid ${seller.pid}\\) runs the sponsor with the sponsor's key`));
     assert.match(out, /stop it \(Ctrl-C, or kill its pid\), run hearth sweep, then start it again with the same hearth sell flags and --resume/);
-    assert.match(out, /Its offers stay on sale meanwhile \(hearth stop would close them\)\. The seller funds its first writes from the sponsor's key by itself\./);
+    assert.match(out, /Its offer stays on sale meanwhile \(hearth stop would close it\)\. The seller funds its first writes from the sponsor's key by itself\./);
   } finally { seller.kill(); node.close(); }
 });
 
-test("`hearth sell` alone sells at 10000 coin a day, and its first run says what a host earns and spends", async () => {
+test("`hearth sell` alone sells at the default terms, and its first run says what a host earns and spends", async () => {
   const node = await freshNode();
   try {
     const run = () => hearth(["sell", "--root", node.root, "--once", "--lattice", node.lattice, "--sponsor-bin", node.sponsor]);
     const first = await run();
     assert.equal(first.code, 0, first.out);
     assert.match(first.out, /You earn Hearth coin \(the market's coin\): buyers' orders pay the seller's key, and the blocks it makes pay its sponsor's key .*Spend it on hosting or storage from any seller on the market\./);
-    const file = join(node.root, `hearth/${offerFromFlags({ price: "10000/day" }).id}.json`);
-    assert.equal(JSON.parse(readFileSync(file, "utf8")).price, 10000);
+    assert.match(first.out, /offer 1: 6000 market coin per kB\/s of block capacity and 600 per kB of state growth, per 1d, for each chain on a buyer's path; the hash rate its miner measures/);
     const again = await run();
     assert.doesNotMatch(again.out, /You earn Hearth coin/, "said once, when the key is made");
-    const both = await hearth(["sell", "--price", "1/day", "--offer", file, "--root", node.root, "--once"]);
-    assert.match(both.out, /not both/);
   } finally { node.close(); }
 });
 

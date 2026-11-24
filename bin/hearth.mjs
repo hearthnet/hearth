@@ -1,20 +1,20 @@
 #!/usr/bin/env node
 // Hearth's seller in one command:
 //
-//   npx @hearthnet/hearth sell [--price 10000/day]
+//   npx @hearthnet/hearth sell [--throughput 6000] [--storage 600] [--period 1d] [--hashrate <n>]
 //
 // finds the Lattice node beside it (5.0.0 or newer), makes the seller's key
-// if there is none, writes the offer from its flags, and runs
-// host/sell-hosting.mjs in the foreground, which makes the node host the
-// market and the offer's parent, makes their blocks, and runs the host's
-// sponsor. `--install` writes systemd user units (Linux) or launchd agents
+// if there is none, and runs host/sell-hosting.mjs in the foreground, which
+// makes the node host the market, mines every chain it hosts, writes the
+// offer from its flags, hosts and launches the chains it owes, and runs the
+// host's sponsor. `--install` writes systemd user units (Linux) or launchd agents
 // (macOS) for the node and the seller, and prints the command that loads
 // them.
 //
 //   npx @hearthnet/hearth stop [--now]
 //
-// closes the seller's offers and leaves the seller serving what is paid: it
-// keeps hosting, pacing and sponsoring each chain with paid time until that
+// deletes the seller's offer and leaves the seller serving what is paid: it
+// keeps hosting, mining and sponsoring each chain with paid time until that
 // ends, then exits. `--now` stops the seller and hosting at once, and says
 // what its buyers lose.
 //
@@ -55,27 +55,24 @@ import * as sdk from "../vendor/lattice-sdk.js";
 import { keyFileJSON } from "../client/tx.mjs";
 import { reader } from "../client/market.mjs";
 import { OWN_LIMIT, coinLines, exchangeOf, receiptsOf, sellCoin } from "../host/coin.mjs";
-import { CREATED_WINDOW } from "../client/records.mjs";
-import { DEFAULT_MARKET, DEFAULT_PRICE, WHY_SELL, DEFAULT_STORAGE_RATE, authedFetch, burn, burnChain, chainSync, checkRoot, checkSellFlags, ensureKey, findRoot,
-  installedSeller, nodeSecret, nodeVersion, offerFromFlags, markClosing, markReopen, onPath, sponsorBooks, operatorRPC, parseAmount, rpcPort,
+import { DEFAULT_MARKET, DEFAULT_TERMS, WHY_SELL, DEFAULT_STORAGE_RATE, authedFetch, burn, burnChain, chainSync, checkRoot, checkSellFlags, ensureKey, findRoot,
+  installedSeller, nodeSecret, nodeVersion, markClosing, markReopen, onPath, sponsorBooks, operatorRPC, parseAmount, rpcPort,
   sellerFiles, serviceUnits, sweep, waitSynced } from "../host/hearth.mjs";
 import { sponsorAnswers, sponsorBinary, sponsorStorage, unpin } from "../host/sponsor.mjs";
 import { initManagedNode, installTools, keepManagedNode, managedRoot, nodeAnswers, runManagedNode, TUNNEL } from "../host/runtime.mjs";
 import { openTunnel, PUBLIC_READ_PORT, startProxy } from "../host/public.mjs";
 import { REMOTE_STORAGE, judgeOwn, report } from "../host/status.mjs";
-import { isRootCID } from "../client/records.mjs";
 import { stop } from "../host/stop.mjs";
-import { pacer } from "../host/pace.mjs";
+import { miner } from "../host/pace.mjs";
 import { earn } from "../host/earn.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const { name, version } = JSON.parse(readFileSync(join(HERE, "../package.json"), "utf8"));
 const NODE = "[--root <node root> | --node <url> --token-file <file>] [--key <file>] [--lattice <path>]";
 const VERBS = {
-  sell: `hearth sell [--price ${DEFAULT_PRICE}] [--parent Nexus] [--chains 10]
-                   [--url https://host.example [--proof <url>] | --public | --key-only] [--market ${DEFAULT_MARKET}]
-                   ${NODE} [--offer offer.json]
-                   [--id <offer id>] [--storage-offer storage.json] [--interval 30] [--fee <n>] [--once]
+  sell: `hearth sell [--throughput ${DEFAULT_TERMS.throughput}] [--storage ${DEFAULT_TERMS.storage}] [--period ${DEFAULT_TERMS.period}] [--hashrate <hashes/s>] [--id 1]
+                   [--public | --key-only] [--market ${DEFAULT_MARKET}] ${NODE}
+                   [--interval 30] [--fee <n>] [--once]
                    [--sponsor-bin <path>] [--sponsor-port 8650] [--sponsor-url <https url>]
                    [--storage-rate ${DEFAULT_STORAGE_RATE}] [--storage-budget 256M]
                    [--burn <coin> [--burn-chain <path>]] [--install] [--resume]`,
@@ -100,10 +97,10 @@ try { parsed = parseArgs({
   allowPositionals: verb === "burn" || verb === "unpin" || verb === "sell-coin",
   options: {
     root: { type: "string" }, node: { type: "string" }, "token-file": { type: "string" },
-    market: { type: "string", default: DEFAULT_MARKET }, key: { type: "string" }, offer: { type: "string" },
-    id: { type: "string" }, url: { type: "string" }, proof: { type: "string" }, public: { type: "boolean" }, "key-only": { type: "boolean" }, "storage-offer": { type: "string" },
+    market: { type: "string", default: DEFAULT_MARKET }, key: { type: "string" },
+    id: { type: "string" }, public: { type: "boolean" }, "key-only": { type: "boolean" },
     lattice: { type: "string" }, interval: { type: "string", default: "30" }, "storage-budget": { type: "string" }, once: { type: "boolean", default: false }, fee: { type: "string" },
-    price: { type: "string" }, parent: { type: "string" }, chains: { type: "string" },
+    throughput: { type: "string" }, storage: { type: "string" }, period: { type: "string" }, hashrate: { type: "string" }, price: { type: "string" },
     install: { type: "boolean", default: false }, resume: { type: "boolean", default: false }, float: { type: "string", default: "100" },
     burn: { type: "string" }, "burn-chain": { type: "string" }, chain: { type: "string" },
     "sponsor-bin": { type: "string" }, "sponsor-port": { type: "string" }, "sponsor-url": { type: "string" }, "storage-rate": { type: "string" },
@@ -161,15 +158,15 @@ async function nodeRoot({ create = false, install = false } = {}) {
   return (await runManagedNode({ home, lattice: a.lattice })).root;
 }
 
-/** Hearth's own node is reachable by default: with no URL of the seller's own (nor --key-only), a tunnel. */
-const defaultPublic = () => !a["key-only"] && !a.url && !a.proof && !a["sponsor-url"];
+/** Hearth's own node is reachable by default: with no sponsor URL of the seller's own (nor --key-only), a tunnel. */
+const defaultPublic = () => !a["key-only"] && !a["sponsor-url"];
 
 /** The node's public read port at `root` (`lattice config get publicRead`), or a failure saying how to set it. */
 function publicReadPort(root) {
   const get = (key) => { try { return JSON.parse(execFileSync(a.lattice, ["config", "get", key, "--root", root], { encoding: "utf8" })); } catch { return undefined; } };
   const port = get("publicRead");
   if (!Number.isInteger(port) || port <= 0 || get("publicSubmit") !== true) {
-    fail(`--public serves the node's public read port, and the node at ${root} has none taking writes: run\n  ${a.lattice} config set publicRead=${PUBLIC_READ_PORT} publicSubmit=true --root ${root}\nthen restart the node (or sell with --key-only, or --url)`);
+    fail(`--public serves the node's public read port, and the node at ${root} has none taking writes: run\n  ${a.lattice} config set publicRead=${PUBLIC_READ_PORT} publicSubmit=true --root ${root}\nthen restart the node (or sell with --key-only)`);
   }
   return port;
 }
@@ -224,7 +221,7 @@ function runningSeller(pidFile) {
   try { return execFileSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8" }).includes("sell-hosting.mjs") ? pid : undefined; } catch { return undefined; }
 }
 
-/** How to pause the seller without closing its offers (`hearth stop` closes them), then run `then`. */
+/** How to pause the seller without closing its offer (`hearth stop` closes it), then run `then`. */
 function pauseHow(then) {
   const service = installedSeller({ platform: process.platform, home: homedir() });
   return service ? `stop its service (${process.platform === "darwin" ? `launchctl bootout gui/$(id -u)/net.hearth.seller` : "systemctl --user stop hearth.service"}), `
@@ -251,7 +248,7 @@ if (verb === "sell-coin") {
     const privateKey = readKey(key);
     // The seller and its lattice-sponsor sign with these keys: two signers would race for the nonce.
     const pid = runningSeller(sellerFiles({ root, key }).pid);
-    if (pid) fail(`the seller (pid ${pid}) signs with the seller's key, and two signers would race for its nonces: ${pauseHow("hearth sell-coin")}. Its offers stay on sale meanwhile (hearth stop would close them).`);
+    if (pid) fail(`the seller (pid ${pid}) signs with the seller's key, and two signers would race for its nonces: ${pauseHow("hearth sell-coin")}. Its offer stays on sale meanwhile (hearth stop would close it).`);
     if (await sponsorAnswers(port)) fail(`a sponsor answers on port ${port}: stop it before selling coin (the seller runs it beside its keys), or give --sponsor-port`);
     // Every read has a deadline; once the market is synced, so has the whole.
     const fetchImpl = timed(authed);
@@ -283,7 +280,7 @@ if (verb === "sweep") {
     const pid = runningSeller(sellerFiles({ root, key }).pid);
     const pause = pauseHow("hearth sweep");
     if (pid) fail(`the seller (pid ${pid}) runs the sponsor with the sponsor's key, and two signers would race for its nonces: ${pause}. `
-      + "Its offers stay on sale meanwhile (hearth stop would close them). The seller funds its first writes from the sponsor's key by itself.");
+      + "Its offer stays on sale meanwhile (hearth stop would close it). The seller funds its first writes from the sponsor's key by itself.");
     const port = a["sponsor-port"] ?? "8650";
     if (await sponsorAnswers(port)) fail(`a sponsor answers on port ${port}: stop it before sweeping its key (it signs with the same key), or give --sponsor-port`);
     const chain = burnChain(a.chain ?? a.market, a.market);
@@ -316,9 +313,7 @@ if (verb === "status") {
     }
     const n = reader(sdk, node, { fetchImpl });
     const m = await n.market(a.market);
-    const { status } = (await operatorRPC(node, fetchImpl)("/config")).body;
-    const hosted = new Set((status.chains ?? []).filter((c) => c.actual === "hosted").map((c) => c.path));
-    const own = await judgeOwn({ sdk, n, m, self, hosted });
+    const own = await judgeOwn({ sdk, n, m, self });
     const [seller, sponsor] = await Promise.all([n.account(a.market, self), n.account(a.market, sponsorAddress)]);
     console.log(report({ market: a.market, height: m.height, seller: { address: self, balance: seller.balance }, sponsor: { address: sponsorAddress, balance: sponsor.balance },
       ...own, storage: root ? await sponsorStorage(a["sponsor-port"] ?? "8650") : REMOTE_STORAGE }).join("\n"));
@@ -340,7 +335,7 @@ if (verb === "unpin") {
   try {
     if (positionals.length !== 1) fail("hearth unpin <cid>: the root CID of the file to unpin");
     const [cid] = positionals;
-    if (!isRootCID(cid)) fail(`${cid} is not a CID (bafy...): give the root CID of the file to unpin`);
+    if (!/^bafy[a-z2-7]{50,}$/.test(cid)) fail(`${cid} is not a CID (bafy...): give the root CID of the file to unpin`);
     const port = a["sponsor-port"] ?? "8650";
     if (!/^[1-9][0-9]*$/.test(port)) fail(`--sponsor-port is a port, not ${port}`);
     // The sponsor takes the node's cookie as the operator's credential.
@@ -363,7 +358,7 @@ if (verb === "stop") {
     const files = sellerFiles({ root, key });
     let pid = runningSeller(files.pid);
     if (a.now) {
-      // The seller first, so nothing paces or sponsors any more.
+      // The seller first, so nothing mines or sponsors any more.
       const service = installedSeller({ platform: process.platform, home: homedir() });
       if (service) {
         console.log(`stopping the seller's service: ${service.stop.join(" ")}`);
@@ -373,7 +368,7 @@ if (verb === "stop") {
         // The node the seller's `hearth sell` runs (none when a service or the user runs it).
         const node = sellerNode(pid, root);
         try { process.kill(pid, "SIGTERM"); for (let i = 0; i < 100; i++) { process.kill(pid, 0); await new Promise((r) => setTimeout(r, 100)); } } catch {}
-        console.log(`stopped the seller (pid ${pid}), its pacer and its sponsor`);
+        console.log(`stopped the seller (pid ${pid}), its miner and its sponsor`);
         // Hearth's node stops with the seller that ran it: this verb runs it now.
         if (node) {
           // Gone, or a zombie (an init that reaps no orphans leaves one).
@@ -395,17 +390,16 @@ if (verb === "stop") {
     if (root === undefined) console.log("with --node, stop the seller wherever it runs");
     await waitSynced(node, a.market, { fetchImpl, label: "market" });
     // With no seller, the market's blocks come from other hosts; until the
-    // close settles, this one paces the market too, paying its sponsor.
+    // close lands, this one mines what the node hosts too, paying its sponsor.
     const sponsorKey = join(dirname(key), "sponsor.json");
-    const pace = !pid && existsSync(sponsorKey) && pacer({ rpc: node, fetchImpl, to: JSON.parse(readFileSync(sponsorKey, "utf8")).address, chains: () => [a.market], log: () => {} });
+    const mining = !pid && existsSync(sponsorKey) && miner({ rpc: node, fetchImpl, to: JSON.parse(readFileSync(sponsorKey, "utf8")).address, log: () => {} });
     const done = await stop({ sdk, node, fetchImpl, rpc: operatorRPC(node, fetchImpl), privateKey, market: a.market, fee: a.fee, now: a.now, sellerRuns: !!pid })
-      .finally(() => pace && pace.stop());
+      .finally(() => mining && mining.stop());
     const when = (h) => new Date(Date.now() + Number(h - done.height) * done.blockTime).toISOString().slice(0, 16).replace("T", " ");
     if (done.closed.length) {
-      console.log(`closed ${done.closed.map((c) => c.id).join(", ")} at market block ${done.closedAt ?? done.height}: no new orders once it takes effect at block ${(done.closedAt ?? done.height) + CREATED_WINDOW}; orders placed before then are owed`
+      console.log(`closed ${done.closed.join(", ")} at market block ${done.height}: no order lands on it from then on; orders already in a block are owed`
         + (done.landed ? "" : " (not in a block yet: run hearth stop again to check)"));
-    } else console.log(done.closedAt === undefined ? "no offer of this key is on sale" : `the offers were closed at market block ${done.closedAt}`);
-    if (done.landed && !a.now && done.height < done.settledAt) console.log(`orders still settle until market block ${done.settledAt} (about ${when(done.settledAt)} UTC): what is paid below may grow; run hearth stop again then`);
+    } else console.log("no offer of this key is on sale");
     const last = [...done.paid.values()].reduce((x, y) => (y > x ? y : x), 0n);
     const paidLine = `${done.paid.size} chains have paid time left, the last to market block ${last} (about ${when(last)} UTC)`;
     if (a.now) {
@@ -415,13 +409,12 @@ if (verb === "stop") {
     } else if (pid) {
       console.log(done.paid.size
         ? `${paidLine}: the seller (pid ${pid}) keeps hosting them, making their blocks and sponsoring them until then, and then exits. Keep the node running.`
-        : "nobody has paid time left: the seller exits once the orders have settled");
+        : "nobody has paid time left: the seller exits once the close has landed");
     } else {
       console.log(done.paid.size
         ? `${paidLine}: this node keeps hosting them (${done.kept.join(" ")}), but no seller is running to make their blocks. Start it as before with --resume added (or its service): it serves them until then, writes no offer, and exits.`
         : "nobody has paid time left");
     }
-    if (done.settling) console.log(`${done.settling} orders were still settling`);
     if (done.dropped.length) console.log(`no longer hosts: ${done.dropped.join(" ")} (what it stored stays)`);
   } catch (e) { fail(e.message); }
   process.exit(0);
@@ -435,9 +428,9 @@ if (verb === "earn") {
     const workers = Number(a.workers);
     if (!Number.isInteger(workers) || workers < 1) fail("--workers is a whole number of threads, at least 1");
     const r = reader(sdk, node, { fetchImpl });
-    // Enough for what `hearth sell` writes (offer, url, storage offer) and a close: four fees.
+    // Enough for what `hearth sell` writes (its offer) and its close: two fees.
     const until = a.until !== undefined ? parseAmount(a.until, "--until")
-      : 4n * BigInt((await r.api("/api/chain/info", a.market).catch(() => ({}))).minRelayFee ?? 1);
+      : 2n * BigInt((await r.api("/api/chain/info", a.market).catch(() => ({}))).minRelayFee ?? 1);
     console.log(`earning ${until} coin on ${a.market} for ${address} with ${workers} thread${workers > 1 ? "s" : ""}, working for ${a.sponsor}`);
     // The balance counts only once the node has synced the market.
     const balance = async () => ((await chainSync(node, a.market, fetchImpl)).synced ? (await r.account(a.market, address)).balance : undefined);
@@ -449,7 +442,7 @@ if (verb === "earn") {
 
 try {
   // Every flag checked, and the node found, before anything is written.
-  if (!a.price && !a.offer) a.price = DEFAULT_PRICE;
+  if (a.price !== undefined) fail("--price is gone: an offer prices throughput and storage (--throughput, --storage, per --period)");
   checkSellFlags(a);
   // The node: remote with --node, else its root.
   const root = await nodeRoot({ create: true, install: a.install });
@@ -474,24 +467,16 @@ try {
     const readPort = publicReadPort(root);
     try { await fetch(`http://127.0.0.1:${readPort}/api/chain/info?chainPath=Nexus`, { signal: AbortSignal.timeout(5_000) }); }
     catch { fail(`the node at ${root} does not answer on its public read port ${readPort}: restart it (it takes publicRead when it starts), then run hearth sell --public again`); }
-    const proxy = await startProxy({ nodePort: readPort, sponsorPort: Number(a["sponsor-port"] ?? 8650), seller: address });
+    const proxy = await startProxy({ nodePort: readPort, sponsorPort: Number(a["sponsor-port"] ?? 8650) });
     const { cloudflared } = await installTools({ home: homedir(), pinned: TUNNEL });
     tunnel = await openTunnel({ bin: cloudflared, port: proxy.port, log: (line) => console.log(line) });
-    a.url = tunnel.url;
     a["sponsor-url"] = `${tunnel.url}/sponsor`;
-    console.log(`public at ${tunnel.url} (a Cloudflare quick tunnel to this machine: a new URL each start, which the seller writes)`);
+    console.log(`public at ${tunnel.url}: the node's public read port, and its sponsor at /sponsor (a Cloudflare quick tunnel to this machine: a new URL each start)`);
   }
 
-  // The offer: its file, or one written beside the key from the flags.
-  let offerPath = a.offer && resolve(a.offer);
-  if (a.price) {
-    const offer = offerFromFlags({ price: a.price, parent: a.parent, chains: a.chains, id: a.id });
-    // One file per offer id: the same flags find their file, new flags write
-    // a new one (and the seller says the old offer stays on sale).
-    offerPath = join(dirname(key), `${offer.id}.json`);
-    if (!existsSync(offerPath)) writeFileSync(offerPath, `${JSON.stringify(offer, null, 2)}\n`);
-    console.log(`offer ${offer.id}: ${offer.price} coin per chain on the path per ${offer.period}, ${offer.capacity} chains under ${offer.parent}${a.url ? `, at ${a.url}` : ", key only (no --url)"}`);
-  }
+  const t = { ...DEFAULT_TERMS, ...Object.fromEntries(["throughput", "storage", "period", "hashrate"].filter((k) => a[k] !== undefined).map((k) => [k, a[k]])) };
+  console.log(`offer ${a.id ?? "1"}: ${t.throughput} market coin per kB/s of block capacity and ${t.storage} per kB of state growth, per ${t.period}, `
+    + "for each chain on a buyer's path; " + (t.hashrate ? `${t.hashrate} hashes per second` : "the hash rate its miner measures"));
   if (a.burn) {
     console.log(`burns until ${a.burn} is burned for ${address} on ${burnChain(a["burn-chain"] ?? a.market, a.market)}, once`);
   }
@@ -499,14 +484,13 @@ try {
   const where = root ? ["--root", root] : ["--node", a.node, "--token-file", resolve(a["token-file"])];
   const pass = (flag) => (a[flag] === undefined ? [] : [`--${flag}`, a[flag]]);
   const sponsorBin = a["sponsor-bin"]?.includes("/") ? ["--sponsor-bin", resolve(a["sponsor-bin"])] : pass("sponsor-bin");
-  const sellArgs = [...where, "--market", a.market, "--key", key, "--offer", offerPath,
-    ...pass("url"), ...pass("proof"), ...pass("fee"), ...pass("burn"), ...pass("burn-chain"), ...(a["storage-offer"] ? ["--storage-offer", resolve(a["storage-offer"])] : []),
+  const sellArgs = [...where, "--market", a.market, "--key", key,
+    ...pass("id"), ...pass("throughput"), ...pass("storage"), ...pass("period"), ...pass("hashrate"), ...pass("fee"), ...pass("burn"), ...pass("burn-chain"),
     ...sponsorBin, ...pass("sponsor-port"), ...pass("sponsor-url"), ...pass("storage-rate"), ...pass("storage-budget"),
     "--interval", a.interval, ...(a.once ? ["--once"] : []), ...(a.resume ? ["--resume"] : [])];
 
   if (a.install) {
-    // The services run the seller with the offer just written and every path
-    // absolute; from an npx cache, through npx at this version, which a cache
+    // The services run the seller with these flags and every path absolute; from an npx cache, through npx at this version, which a cache
     // clean cannot strand.
     // Node as the shell finds it (e.g. /opt/homebrew/bin/node), not this
     // process's resolved path, which an upgrade of node deletes.
@@ -525,8 +509,8 @@ try {
       writeFileSync(unit.file, unit.content);
       console.log(`wrote ${unit.file}`);
     }
-    // Installing puts the offer on sale: the service's next start writes a
-    // version from the file once, though it runs with --resume.
+    // Installing puts the offer on sale: the service's next start sells,
+    // though it runs with --resume.
     markReopen(sellerFiles({ root, key }));
     console.log(`load them with:\n  ${load}\n${note}`);
     // Hearth's own node, run by a hearth sell still running: the node service
