@@ -6,8 +6,9 @@
 //
 //   void   the buyer's fault, from the order's own bytes and the offer
 //   full   the offer had already sold `capacity` chains
-//   taken  the path holds another genesis, or an earlier order at this host
-//          named the path with another payload
+//   taken  an earlier order for the path, at any host, named another
+//          payload (`elsewhere` when it was at another host: then not the
+//          host's fault), or the path holds another genesis
 //   owed   served from `created + SETTLE` until its paid time runs out, or
 //          the offer ends, whichever is first
 //
@@ -59,7 +60,7 @@ export function judge({ sdk, height, versions, orders, renewals = [], genesis = 
   settled.sort(byHeight);
 
   const counted = new Map();  // offer → Set of chains it sold
-  const firstAtPath = new Map();  // `<host> <path>` → payload of the earliest non-void, non-full order
+  const firstAtPath = new Map();  // path → the earliest non-void, non-full order for it, at any host
   const owed = new Map();  // `<host>/<id>/<path>` → { offer, orders } owed for that chain
   for (const o of settled) {
     const key = `${o.host}/${o.id}`;
@@ -75,18 +76,19 @@ export function judge({ sdk, height, versions, orders, renewals = [], genesis = 
       if (BigInt(sold.size) >= offer.capacity) { verdicts.set(o.key, { kind: "full", reason: `the offer had sold its ${offer.capacity} chains`, order: o.order }); continue; }
       sold.add(chain);
     }
-    const at = `${o.host} ${o.path}`;
+    // The first order decides the path, from the orders alone: a genesis a
+    // reader knows never changes which order is first.
+    const first = firstAtPath.get(o.path) ?? (firstAtPath.set(o.path, o), o);
+    if (first.payloadText !== o.payloadText) {
+      const elsewhere = first.host !== o.host;
+      verdicts.set(o.key, { kind: "taken", elsewhere, reason: `an earlier order for the path${elsewhere ? ", at another host," : " at this host"} named another payload`, order: o.order });
+      continue;
+    }
     const facts = genesis.get(o.path);
     if (facts && !sameGenesis(sdk, facts, o.payload)) {
       verdicts.set(o.key, { kind: "taken", reason: "the path holds a genesis not built from this payload", order: o.order });
-      firstAtPath.has(at) || firstAtPath.set(at, o.payloadText);
       continue;
     }
-    if (firstAtPath.has(at) && firstAtPath.get(at) !== o.payloadText) {
-      verdicts.set(o.key, { kind: "taken", reason: "an earlier order at this host named the path with another payload", order: o.order });
-      continue;
-    }
-    firstAtPath.set(at, o.payloadText);
     const chainAt = `${o.host}/${o.id}/${o.path}`;
     owed.has(chainAt) ? owed.get(chainAt).push(o) : owed.set(chainAt, [o]);
   }

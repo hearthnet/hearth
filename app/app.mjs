@@ -526,10 +526,10 @@ async function viewLaunch(view, _, current) {
         // Re-render from the fresh market, so the changed offer is not chosen and sent again.
         if (why) { launchInFlight = false; carriedError = `The offer at ${hostName(k.split("/")[0])} ${why} since you chose it. Check your hosts and launch again.`; route(); return; }
       }
-      const hosts = new Set(offers.map(([k]) => k.split("/")[0]));
-      const takenHere = fresh.orders.some((x) => hosts.has(x.host) && x.path === path && ["owed", "pending"].includes(verdicts.get(x.key)?.kind) && x.buyer !== me.address);
+      // The first order for a name, at any host, wins it (a launched chain is not a committed child of its parent).
+      const taken = fresh.orders.some((x) => x.path === path && ["owed", "pending"].includes(verdicts.get(x.key)?.kind) && x.buyer !== me.address);
       const exists = await (await readerOf(offers[0][1].parent)).hasChild(offers[0][1].parent, path.split("/").at(-1));
-      if (takenHere || exists) throw new Error(`${path} is already ${exists ? "a chain" : "ordered at one of these hosts"}; pick another name.`);
+      if (taken || exists) throw new Error(`${path} is already ${exists ? "a chain" : "someone else's order"}; pick another name.`);
       button.textContent = offers.length > 1 ? "Paying the hosts…" : "Paying the host…";
       const payload = { spec: s, premineTo: s.premine > 0n ? me.address : null, modules: mods, genesisTransactions: [] };
       let keys;
@@ -573,10 +573,12 @@ function statsByHost() {
   for (const o of market.orders) {
     const v = verdicts.get(o.key);
     const s = stats.get(o.host) ?? { owed: 0, active: 0, full: 0, taken: 0, void: 0, pending: 0, unserved: 0n, paid: 0n };
-    s[v.kind] = (s[v.kind] ?? 0) + 1;
+    // Lost to an earlier order at another host: the buyer's to check, not the host's fault.
+    const kind = v.kind === "taken" && v.elsewhere ? "void" : v.kind;
+    s[kind] = (s[kind] ?? 0) + 1;
     if (v.kind === "owed" && v.active) s.active++;
     s.paid += o.paid;
-    if (v.kind === "full" || v.kind === "taken") s.unserved += o.paid;
+    if (v.kind === "full" || (v.kind === "taken" && !v.elsewhere)) s.unserved += o.paid;
     stats.set(o.host, s);
   }
   return stats;
@@ -1096,7 +1098,7 @@ async function viewOrder(view, key, current) {
     ["Launched", launched, v.kind === "owed" && !launched ? (p?.state === "down" ? "The host does not answer right now" : p?.state === "other" ? "The host serves a different chain at this path" : "The host is building its genesis") : ""],
   ];
   view.innerHTML = `<section class="stack"><p><a href="#/orders">← Your apps</a></p><div class="row"><h1 class="mono" style="font-size:22px">${esc(o.path)}</h1>${pill(v)}</div></section>
-  ${["void", "full", "taken"].includes(v.kind) ? `<div class="notice bad">${esc(v.reason)}. ${v.kind === "void" ? "The host does not owe this chain." : "This counts against the host as paid, not served."}</div>` : ""}
+  ${["void", "full", "taken"].includes(v.kind) ? `<div class="notice bad">${esc(v.reason)}. ${v.kind === "void" ? "The host does not owe this chain." : v.elsewhere ? "Someone ordered this name first at another host; this host does not owe it, and it does not count against the host." : "This counts against the host as paid, not served."}</div>` : ""}
   ${["void", "full", "taken"].includes(v.kind) ? "" : `<section><ol class="steps">${steps.map(([label, done, note], i) => {
       const now = !done && steps.slice(0, i).every((s) => s[1]);
       return `<li class="${done ? "done" : now ? "now" : ""}"><span class="dot">${done ? "✓" : ""}</span><span><b>${label}</b>${note ? `<br><span class="small muted">${note}</span>` : ""}</span></li>`; }).join("")}</ol></section>`}

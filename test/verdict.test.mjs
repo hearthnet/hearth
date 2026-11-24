@@ -292,3 +292,30 @@ test("an offer's sponsor by its path is on the host's url record's origin, as th
   assert.equal(sponsorAt("https://other.example/s", "https://host.example"), "https://other.example/s");
   assert.equal(sponsorAt(undefined, "https://host.example"), undefined);
 });
+
+test("the first order for a path, at any host, wins it", () => {
+  const HOST2 = key(5);
+  const text = offerText(OFFER.created, formatOffer(OFFER));
+  const versions = new Map([[`${HOST}/o`, [text]], [`${HOST2}/o`, [text]]]);
+  const at = (host, o) => ({ ...o, host, key: orderKey({ host, id: o.id, payer: o.buyer, height: o.created, paid: o.paid, path: o.path }) });
+  const theirs = payload({ ...SPEC, initialReward: 11n });
+  const first = order({ created: 200n, paid: 50n }), richer = at(HOST2, order({ buyer: B, created: 205n, paid: 1000n, payloadText: theirs }));
+  const v = judge({ sdk, height: 1000n, versions, orders: [richer, first] });
+  assert.deepEqual([v.get(first.key).kind, v.get(richer.key).kind], ["owed", "taken"], "a later, larger payment at another host does not take it");
+  assert.equal(v.get(richer.key).elsewhere, true, "lost at another host: not this host's fault");
+  assert.equal(v.get(first.key).until, 200n + 1440n, "paid time from the order, as before");
+  const sameElsewhere = at(HOST2, order({ buyer: C, created: 300n }));
+  assert.equal(judge({ sdk, height: 1000n, versions, orders: [first, sameElsewhere] }).get(sameElsewhere.key).kind, "owed", "the same genesis at a second host");
+  const here = order({ buyer: B, created: 201n, payloadText: theirs });
+  assert.equal(judge({ sdk, height: 1000n, versions, orders: [first, here] }).get(here.key).elsewhere, false, "at the same host: counted against it, as before");
+});
+
+test("a reader that knows a path's genesis judges which order was first as one that does not", () => {
+  const facts = (spec) => ({ specCID: sdk.cidV1DagCbor(sdk.encodeDagCbor(spec)), premineTo: null, transactions: [] });
+  const OTHER = { ...SPEC, initialReward: 11n };
+  const x = order({ created: 200n }), y = order({ buyer: B, created: 205n, payloadText: payload(OTHER) });
+  for (const g of [facts(SPEC), facts(OTHER)]) {
+    const v = judge({ sdk, height: 1000n, versions: offers(), orders: [x, y], genesis: new Map([["Nexus/testnet/x", g]]) });
+    assert.equal(v.get(y.key).kind, "taken", "y is never owed: x came first");
+  }
+});

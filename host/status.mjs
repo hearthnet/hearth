@@ -23,14 +23,15 @@ export async function judgeOwn({ sdk, n, m, self, hosted }) {
     const facts = await n.genesis(path).catch(() => undefined);
     if (facts) genesis.set(path, facts);
   }
-  const verdicts = judge({ sdk, height: m.height, versions: m.versions, orders: mine, renewals, genesis });
+  // Every host's orders: the first order for a path, at any host, decides it (verdict.mjs).
+  const verdicts = judge({ sdk, height: m.height, versions: m.versions, orders: m.orders.filter((o) => hosting(m, o)), renewals, genesis });
   const owed = new Map(), until = new Map();
   for (const o of mine) {
     const v = verdicts.get(o.key);
     if (v.kind === "owed" && v.active && !owed.has(o.path)) { owed.set(o.path, v.payload); until.set(o.path, v.until); }
   }
   const counts = {};
-  for (const v of verdicts.values()) counts[v.kind] = (counts[v.kind] ?? 0) + 1;
+  for (const o of mine) { const k = verdicts.get(o.key).kind; counts[k] = (counts[k] ?? 0) + 1; }
   return { mine, renewals, verdicts, owed, until, counts, ...earnings({ m, self, mine, renewals, verdicts }) };
 }
 
