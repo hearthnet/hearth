@@ -37,7 +37,7 @@ test("the order carries the minted genesis, which checks out against its CIDs, s
 });
 
 test("without a proof of the genesis's work, minting fails before anything is paid", () => {
-  assert.throws(() => mint((input) => ({ ...buildChildGenesis(input) })), /no proof of the genesis's work/);
+  assert.throws(() => mint((input) => ({ ...buildChildGenesis(input), proofs: undefined })), /no proof of the genesis's work/);
 });
 
 test("base64 of more bytes than one spread takes", () => {
