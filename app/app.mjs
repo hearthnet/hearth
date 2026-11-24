@@ -257,6 +257,7 @@ async function route() {
   try {
     await (routes[name] ?? viewLaunch)(view, decodeURIComponent(rest.join("/")), () => id === renderId);
   } catch (e) {
+    console.error(e);
     if (id === renderId) view.innerHTML = `<div class="notice bad">Could not read the market from ${esc(cfg.node)}: ${esc(e.message)}. <a href="" onclick="location.reload();return false">Try again</a></div>`;
   }
   window.scrollTo?.(0, 0);
@@ -1078,7 +1079,8 @@ async function viewOrder(view, key, current) {
     ? `Pins block ${fmt(anchor.height)}; refresh it when you redeploy, about every ${fmt(WALK)} blocks (${blocksTime(WALK, blockTime)} at this chain's block time).`
     : `Pins the chain's genesis; once the chain is past ${fmt(CHECKPOINT_AFTER)} blocks (${blocksTime(Number(CHECKPOINT_AFTER), blockTime)} at this chain's block time), copy it again to pin a recent block.`;
   const use = { sdkURL: SDK_URL, chain: o.path, anchor, nodes, sponsors: [...new Set(hosting.map(([, k]) => sponsorURL(m.terms.get(k))).filter(Boolean))], ownKeys };
-  const snippetBlock = !rulesKnown ? `<div class="notice bad">The rule presets did not load, so this page can't tell which keys this chain lets you write. <a href="" onclick="location.reload();return false">Reload</a> to try again.</div>`
+  // Built only once the chain serves: before that there is no genesis to pin.
+  const snippetBlock = () => !rulesKnown ? `<div class="notice bad">The rule presets did not load, so this page can't tell which keys this chain lets you write. <a href="" onclick="location.reload();return false">Reload</a> to try again.</div>`
     : !node ? `<div class="notice bad">This host's read URL is not a valid https URL, so there is nothing to connect to.</div>`
     : `<p class="muted">${SDK_TAG ? "Paste this into any web page. It" : "Test write"} writes one key and reads it back, checking what it reads against a pinned block. ${pinNote} ${nodes.length > 1 ? `It reads a block only once two of your hosts' nodes hold it.` : `Only one of your hosts publishes a node, so its reads trust that one node: it could serve a made-up block. Order from a host of another operator to check it.`} ${use.sponsors.length ? "Your hosts' sponsors pay the write fees: the writer's device does a few seconds of work instead." : "None of the hosts you ordered from names a sponsor, so whoever writes needs coin on this chain to pay the fee."}</p>
      ${SDK_TAG ? `<pre class="mono card soft" style="white-space:pre-wrap;margin:0" id="snippet">${esc(snippet(use))}</pre>` : `<p class="small muted">The code to paste appears here once a release of the SDK is tagged. Test write works now.</p>`}
@@ -1101,7 +1103,7 @@ async function viewOrder(view, key, current) {
      <div class="grid"><div><p class="muted small">Height</p><p class="stat">${fmt(p.height)}</p></div><div><p class="muted small">Latest block</p><p class="stat" style="font-size:20px">${p.time ? ago(p.time) : "—"}</p></div>
      <div><p class="muted small">Paid until</p><p class="stat" style="font-size:20px">${v.active ? `in ${duration(v.until - m.height)}` : "ended"}</p></div></div>
      <p class="small" id="making" hidden></p>
-     ${snippetBlock}</section>` : ""}
+     ${snippetBlock()}</section>` : ""}
   ${v.kind === "owed" || v.kind === "pending" ? `<section class="stack"><h2>Keep it running</h2><p class="muted">When paid time ends, this host may stop hosting the chain and drop its data; anyone still hosting it keeps it. ${renewable ? `Anyone can pay for more time. Each period is ${duration(offer.period)} for ${fmt(pathPrice(offer, path))} ${coinName}${offer.until < (v.until ?? 0n) + offer.period ? `; this offer ends in ${duration(offer.until - m.height)}, and no time past that is owed` : ""}.` : "This offer is closed, so it sells no more time here."}</p>
      ${renewable ? `<div class="row"><div style="width:120px"><input id="more" type="number" min="1" value="7" aria-label="Periods"></div><button class="btn primary" id="renew" ${v.kind !== "owed" ? "disabled" : ""}>Pay for more</button><span class="small" id="renewNote"></span></div>` : ""}</section>` : ""}`;
   // Whether the hosts you ordered from make this chain's blocks, read by CID.
