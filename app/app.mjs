@@ -22,7 +22,7 @@ import { renewWrite, recordsBody, receiptBody, withdrawalBody, depositBody, subm
 // The browser SDK a buyer's page loads: this repository's vendored copy
 // (vendor/lattice-browser.js) at a release tag. null until a tag holds it;
 // the app itself imports the local file.
-const SDK_TAG = "v2.0.0";
+const SDK_TAG = "v2.1.0";
 const SDK_URL = `https://cdn.jsdelivr.net/gh/hearthnet/hearth@${SDK_TAG}/vendor/lattice-browser.js`;
 const DOCS = "https://hearthnet.github.io/";
 
