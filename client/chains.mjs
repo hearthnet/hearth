@@ -6,6 +6,9 @@
 import { reader } from "./market.mjs";
 import { pathFromNexus } from "./records.mjs";
 
+/** How long a spec read from a node other than the home one is kept. */
+export const REMOTE_SPEC_MS = 10 * 60_000;
+
 /** Nodes for `chainPath` that `entry`'s network declares: `[{ url, declaresSubmit }]`, none on failure. */
 export async function declaredNodes(sdk, entry, chainPath, fetchImpl = (...a) => fetch(...a)) {
   try {
@@ -36,15 +39,27 @@ export function chainReaders(sdk, home, { entry = home.node, fetchImpl: others =
     return found;
   }
 
-  /** A chain's spec, read from its tip by CID (the home node, else one `entry` lists); kept once read. */
-  const specs = new Map();
+  /**
+   * A chain's spec, read from its tip by CID: the home node's kept once
+   * read; one read from another node (trusted, not checked) kept for at
+   * most REMOTE_SPEC_MS, then read again, through a node found again.
+   */
+  const specs = new Map();  // path → { read, until }
   function specOf(chainPath) {
-    if (!specs.has(chainPath)) {
-      const read = (async () => (await home.spec(chainPath)) ?? (await (await readerOf(chainPath)).spec(chainPath)))();
-      specs.set(chainPath, read);
-      read.then((s) => { if (!s) specs.delete(chainPath); }, () => specs.delete(chainPath));
+    if (!(specs.get(chainPath)?.until > Date.now())) {
+      const entry = { until: Infinity };
+      entry.read = (async () => {
+        const own = await home.spec(chainPath);
+        if (own) return own;
+        if (readers.get(chainPath) !== home) readers.delete(chainPath);
+        entry.until = Date.now() + REMOTE_SPEC_MS;
+        return (await readerOf(chainPath)).spec(chainPath);
+      })();
+      specs.set(chainPath, entry);
+      const drop = () => { if (specs.get(chainPath) === entry) specs.delete(chainPath); };
+      entry.read.then((s) => { if (!s) drop(); }, drop);
     }
-    return specs.get(chainPath).catch(() => undefined);
+    return specs.get(chainPath).read.catch(() => undefined);
   }
 
   /** `Map(path → spec)` of every chain from Nexus down to each of `paths`, those that could be read. */

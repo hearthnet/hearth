@@ -319,8 +319,8 @@ block:
 - **void**: a path that is not under Nexus or is the market or a chain
   above it; a genesis that does not check out (its Volumes not exactly its
   own, a spec out of range, or proofs that do not prove this block at this
-  path); a genesis other than the one the first owed order at that offer
-  and path carries; or less than one period paid for the whole path (a
+  path); another genesis landing at that offer and path while the genesis
+  holding it there is still paid for; or less than one period paid for the whole path (a
   renewal too); an order that cannot be judged is void, never the rest;
 - **owed**: from the block it landed in, for `floor(paid / price)` periods,
   the price summed over every chain on its path by each chain's spec;
@@ -328,7 +328,9 @@ block:
 
 The specs above a path are read from the reader's node, else from the
 nodes it lists for the chain (`client/chains.mjs`), by the page and the
-seller alike.
+seller alike. The prices of chains above a path that the seller's or the
+page's own node does not host are read from nodes the network lists, and
+trusted (read again every ten minutes).
 
 The market records only what each seller is paid to run. Which genesis
 holds a path is the chains' to decide (its work), not the market's. A buyer

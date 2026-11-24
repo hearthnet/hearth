@@ -6,9 +6,14 @@ import * as sdk from "../vendor/lattice-sdk.js";
 import { RENEW, chainPrice, formatOffer, formatOrderValue, orderKey, parseGenesis, parseOffer, parseOrderKey, parseOrderValue, pathPrice } from "../client/records.mjs";
 import { judge } from "../client/verdict.mjs";
 import { earnings, judgeOwn } from "../host/status.mjs";
-import { unpin } from "../host/launch.mjs";
+import { launchPins, unpin } from "../host/launch.mjs";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { base64 } from "../app/genesis.mjs";
 import { MODULE_CID, SIZES, mint, respec } from "./minted.mjs";
+import { reader } from "../client/market.mjs";
+import { REMOTE_SPEC_MS, chainReaders } from "../client/chains.mjs";
 
 const PATH = "Nexus/testnet/app";
 const MARKET = "Nexus/testnet/hearth";
@@ -143,10 +148,15 @@ test("owed must be runnable: proofs of this genesis at this path, its children i
   assert.equal(one(order({ n: 5, path: `${MARKET}/app`, paid: 4n * 1050n, value: mint(`${MARKET}/app`).value }), { specs: new Map([...SPECS, [MARKET, SPEC]]) }).kind, "owed", "a chain under the market");
 });
 
-test("the seller reads a spec its node does not hold through the nodes its node lists, as the web app does", async () => {
-  // Every chain here runs the minted genesis (its spec is SPEC); the seller's node holds Nexus, another node Nexus/p.
+/**
+ * The seller's node (http://127.0.0.1:1, holding Nexus) and another
+ * (https://other.test, holding Nexus/p) that it lists: every chain runs the
+ * minted genesis (its spec is SPEC). `latest` counts tip reads by origin.
+ */
+function fakeNetwork() {
   const v = parseOrderValue(mint("Nexus/p").value);
   const volumes = v.volumes;
+  const latest = {};
   const answer = (body, type = "application/json") => new Response(type === "application/json" ? JSON.stringify(body) : body, { headers: { "content-type": type } });
   const serving = { "http://127.0.0.1:1": ["Nexus"], "https://other.test": ["Nexus/p"] };
   const fetchImpl = async (input) => {
@@ -156,14 +166,28 @@ test("the seller reads a spec its node does not hold through the nodes its node 
     if (url.pathname === "/api/chain/endpoints" && url.origin === "http://127.0.0.1:1") return answer({ chainPath: chain.split("/"), endpoints: ["https://other.test"], submitEndpoints: [] });
     if (!serving[url.origin].includes(chain)) return new Response("", { status: 404 });
     if (url.pathname === "/api/chain/info") return answer({ chain: chain.split("/"), height: "3" });
-    if (url.pathname === "/api/block/latest") return answer({ hash: v.genesis, height: "0" });
+    if (url.pathname === "/api/block/latest") { latest[url.origin] = (latest[url.origin] ?? 0) + 1; return answer({ hash: v.genesis, height: "0" }); }
     return new Response("", { status: 404 });
   };
-  const n = (await import("../client/market.mjs")).reader(sdk, "http://127.0.0.1:1", { fetchImpl });
-  const { chainReaders } = await import("../client/chains.mjs");
+  return { fetchImpl, latest, home: reader(sdk, "http://127.0.0.1:1", { fetchImpl }) };
+}
+
+test("the seller reads a spec its node does not hold through the nodes its node lists, as the web app does", async () => {
+  const { fetchImpl, home: n } = fakeNetwork();
   const o = order({ path: "Nexus/p/app", value: mint("Nexus/p/app").value });
   const own = await judgeOwn({ sdk, n, m: { height: 50n, orders: [o] }, self: HOST, market: MARKET, chains: chainReaders(sdk, n, { fetchImpl }) });
   assert.equal(own.verdicts.get(o.key).kind, "owed", own.verdicts.get(o.key).reason);
+});
+
+test("a spec read from another node is read again after ten minutes; the home node's is kept", async () => {
+  const { fetchImpl, latest, home } = fakeNetwork();
+  const chains = chainReaders(sdk, home, { fetchImpl });
+  for (let i = 0; i < 2; i++) { assert.ok(await chains.specOf("Nexus/p")); assert.ok(await chains.specOf("Nexus")); }
+  assert.deepEqual(latest, { "http://127.0.0.1:1": 1, "https://other.test": 1 }, "each read once");
+  const now = Date.now;
+  Date.now = () => now() + REMOTE_SPEC_MS + 1;
+  try { assert.ok(await chains.specOf("Nexus/p")); assert.ok(await chains.specOf("Nexus")); } finally { Date.now = now; }
+  assert.deepEqual(latest, { "http://127.0.0.1:1": 1, "https://other.test": 2 }, "Nexus/p read again; Nexus kept");
 });
 
 test("volumes are exactly the genesis's own, its sizes at least 1; the seller unpins what a chain no longer owed pinned and no owed chain needs", async () => {
@@ -181,8 +205,26 @@ test("volumes are exactly the genesis's own, its sizes at least 1; the seller un
   assert.ok(own.released.includes(GENESIS) && !own.released.includes(MODULE_CID), "the shared module stays");
   const calls = [];
   const rpc = async (route, body, method = "GET") => { calls.push(`${method} ${route}`); return { body: { pins: [GENESIS, "bafyreisomethingelse"] } }; };
-  assert.deepEqual(await unpin({ rpc, released: own.released }), [GENESIS]);
+  const file = join(mkdtempSync(join(tmpdir(), "hearth-pins-")), "launch-pins.json");
+  launchPins(file).add([...own.released, "bafyreisomethingelse"]);
+  const pinned = launchPins(file);
+  assert.deepEqual(await unpin({ rpc, released: own.released, pinned }), [GENESIS]);
   assert.deepEqual(calls, ["GET /pins", `DELETE /pins/${GENESIS}`], "only what the node still pins");
+  assert.equal(launchPins(file).has(GENESIS), false, "no longer recorded once unpinned");
+});
+
+test("the seller unpins only what its own launches pinned, and nothing in a pass where an order could not be judged", async () => {
+  const ended = order({ landed: 10n, paid: PRICE });
+  const now = order({ n: 1, path: "Nexus/testnet/now", landed: 200n, value: mint("Nexus/testnet/now", { timestamp: 1_900_000_000_000 }).value });
+  const unpriced = order({ n: 2, path: "Nexus/unread/app", landed: 200n });
+  const judgeAt = (orders) => judgeOwn({ sdk, m: { height: 250n, orders }, self: HOST, market: MARKET, chains: { specsDownTo: async () => SPECS } });
+  assert.ok((await judgeAt([ended, now])).released.includes(GENESIS));
+  assert.deepEqual((await judgeAt([ended, now, unpriced])).released, [], "an unpriced order may be owed");
+  const calls = [];
+  const rpc = async (route, body, method = "GET") => { calls.push(`${method} ${route}`); return { body: { pins: [GENESIS] } }; };
+  const file = join(mkdtempSync(join(tmpdir(), "hearth-pins-")), "launch-pins.json");
+  assert.deepEqual(await unpin({ rpc, released: [GENESIS], pinned: launchPins(file) }), [], "pinned by someone else (its sponsor)");
+  assert.deepEqual(calls, []);
 });
 
 test("cost: an order short of the chains above is void before its genesis is decoded, and an order's genesis is decoded once", () => {
@@ -205,4 +247,35 @@ test("an underpaid renewal is void, and not counted in earnings", () => {
   assert.match(verdicts.get(renewal.key).reason, /less than one period/);
   assert.equal(verdicts.get(first.key).until, 10n + 100n);
   assert.equal(earnings({ self: HOST, mine: [first, renewal], verdicts }), PRICE);
+});
+
+test("a genesis holds its path at an offer only while it is paid: another genesis landing after its paid time ends holds it from then", () => {
+  const other = mint(PATH, { timestamp: 1_900_000_000_000 });
+  const first = order({ landed: 10n });                                    // paid to 110
+  const early = order({ n: 1, landed: 50n, value: other.value });
+  const after = order({ n: 2, landed: 120n, value: other.value });         // paid to 220
+  const renewal = order({ n: 3, payer: OTHER, landed: 130n, value: RENEW });
+  const v = judged([renewal, after, early, first], { height: 150n });
+  assert.match(v.get(early.key).reason, /another genesis holds this path at this host while it is paid/);
+  assert.deepEqual([v.get(first.key).kind, v.get(first.key).until, v.get(first.key).active], ["owed", 110n, false]);
+  assert.deepEqual([v.get(after.key).kind, v.get(after.key).until, v.get(after.key).active], ["owed", 320n, true], "the renewal pays for the genesis holding it now");
+  assert.equal(v.get(after.key).genesis, other.cid);
+});
+
+test("a proof that is well formed but whose hash misses the genesis's target proves nothing", () => {
+  const noWork = { ...sdk, verifyChildBlockProof: (...a) => ({ ...sdk.verifyChildBlockProof(...a), evidence: {} }) };
+  assert.equal(parseGenesis(sdk, parseOrderValue(VALUE), PATH).error, undefined);
+  assert.match(parseGenesis(noWork, parseOrderValue(VALUE), PATH).error, /does not prove this genesis/);
+});
+
+test("the genesis cache drops orders no longer on the market", () => {
+  let decoded = 0;
+  const counting = { ...sdk, decodeVolumeArchive: (...a) => { decoded++; return sdk.decodeVolumeArchive(...a); } };
+  const a = order({ n: 11 }), b = order({ n: 12 });
+  const run = (o) => judge({ sdk: counting, height: 50n, orders: [o], market: MARKET, specs: SPECS });
+  run(a);
+  const once = decoded;
+  run(b);
+  run(a);
+  assert.equal(decoded, 3 * once, "a was dropped when b's market no longer held it, so it is decoded again");
 });

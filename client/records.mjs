@@ -165,7 +165,9 @@ export function parseGenesis(sdk, value, path) {
   if (extra) return { error: `volume ${extra} is not the genesis's own` };
   for (const proof of value.proofs) {
     const decoded = sdk.decodeChildBlockProof(bytesOf(proof));
-    if (!decoded || !sdk.verifyChildBlockProof(decoded, blockBytes, path.split("/")).ok) return { error: `a proof does not prove this genesis at ${path}` };
+    const verified = decoded && sdk.verifyChildBlockProof(decoded, blockBytes, path.split("/"));
+    // `ok` alone says the proof is well formed; `work` that its hash meets the genesis's target.
+    if (!verified?.ok || verified.evidence.work === undefined) return { error: `a proof does not prove this genesis at ${path}` };
   }
   return { cid: value.genesis, block, spec, volumes };
 }

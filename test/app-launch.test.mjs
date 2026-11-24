@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import * as sdk from "../vendor/lattice-sdk.js";
 import { context, validate } from "../policy/test/host.mjs";
-import { chosenTerms, launchAttempt, launchBody, launchCheck } from "../app/launch.mjs";
+import { chosenTerms, heldCheck, launchAttempt, launchBody, launchCheck } from "../app/launch.mjs";
 import { formatOffer, formatOrderValue, parseOrderKey, pathPrice } from "../client/records.mjs";
 import { judge } from "../client/verdict.mjs";
 import { SIZES, mint } from "./minted.mjs";
@@ -107,4 +107,13 @@ test("a launch signs exactly the offer text the buyer was shown, or stops", () =
   const other = formatOffer({ hashrate: 999n, throughput: 10n, storage: 1n, period: 1440n, blocks: HOST_B });
   assert.throws(() => chosenTerms({ offers, shown, now: new Map([[k, other]]) }), /has new terms/);
   assert.throws(() => chosenTerms({ offers, shown, now: new Map() }), /has closed/);
+});
+
+test("a launch stops before paying a host whose offer holds the path for another genesis still paid for", () => {
+  const holder = { key: "k", host: HOST_A, id: "a1", path: APP, payer: HOST_B };
+  const chosen = [{ host: HOST_A, id: "a1" }];
+  const owed = (active) => new Map([["k", { kind: "owed", active, until: 500n }]]);
+  assert.throws(() => heldCheck({ chosen, orders: [holder], verdicts: owed(true), path: APP }), /hosts another genesis of Nexus\/testnet\/my-app until market block 500/);
+  assert.doesNotThrow(() => heldCheck({ chosen, orders: [holder], verdicts: owed(false), path: APP }), "its paid time ended");
+  assert.doesNotThrow(() => heldCheck({ chosen: [{ host: HOST_B, id: "a1" }], orders: [holder], verdicts: owed(true), path: APP }), "another host");
 });

@@ -15,10 +15,14 @@
 // the terms it landed on) from where paid time ends, or from the block the
 // payment landed in when it had run out.
 //
-// One genesis per path at one offer: the first owed order to land there
-// (ties by key) fixes it; a later order there with another genesis is void.
-// Which genesis holds a path on Lattice is Lattice's to decide (work, and a
-// parent's commitment when the buyer makes one), not the market's.
+// One genesis per path at one offer while it is paid: the first owed order
+// to land there (ties in one block by key) holds the path; another genesis
+// landing there before the holder's paid time ends is void; one landing
+// after it ends holds the path from then on, and so on. A same-block
+// front-run (a rival order whose key sorts first) costs the rival at least
+// one period, paid to the host. Which genesis holds a path on Lattice is
+// Lattice's to decide (work, and a parent's commitment when the buyer makes
+// one), not the market's.
 import { RENEW, parseGenesis, parseOffer, parseOrderValue, pathFromNexus, pathPrice } from "./records.mjs";
 
 export const byLanding = (a, b) => (a.landed !== b.landed ? (a.landed < b.landed ? -1 : 1) : a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
@@ -34,10 +38,14 @@ export const byLanding = (a, b) => (a.landed !== b.landed ? (a.landed < b.landed
  * judged is void, never the call.
  */
 export function judge({ sdk, height, orders, market, specs = new Map() }) {
+  const live = new Set(orders.map((o) => o.key));
+  for (const key of checked.keys()) if (!live.has(key)) checked.delete(key);
   const verdicts = new Map();
-  const chains = new Map();  // `<host>/<id>/<path>` → the owed order there that renewals pay for, and its payments
-  const payments = [];
+  const chains = new Map();  // `<host>/<id>/<path>` → the genesis holding it now: `{ genesis, until, owed }`
+  const held = [];  // every holder in turn, its owed orders
   const voidOf = (o, reason) => verdicts.set(o.key, { kind: "void", reason, order: { landed: o.landed, paid: o.paid } });
+  // Paid time: from where it ends, or from the block the payment landed in when it had run out.
+  const pay = (chain, o, price, terms) => { chain.until = (chain.until > o.landed ? chain.until : o.landed) + (o.paid / price) * terms.period; };
   for (const o of [...orders].sort(byLanding)) {
     try {
       const parts = o.path.split("/");
@@ -47,40 +55,30 @@ export function judge({ sdk, height, orders, market, specs = new Map() }) {
       if (missing) { verdicts.set(o.key, { kind: "unpriced", reason: `no spec read yet for ${missing}`, order: { landed: o.landed, paid: o.paid } }); continue; }
       const terms = parseOffer(o.terms);
       const aboveSpecs = above.map((p) => specs.get(p));
+      const at = `${o.host}/${o.id}/${o.path}`;
+      let chain = chains.get(at);
       // The chains above alone cost at most the whole path: an order short
       // of them is void before its genesis is decoded.
       const reason = !terms ? "the offer's terms do not parse"
         : o.paid < pathPrice(terms, aboveSpecs) ? "paid less than one period for the whole path"
-        : o.value === RENEW ? undefined
-        : genesisReason(sdk, o) ?? (o.paid < pathPrice(terms, [...aboveSpecs, o.genesis.spec]) ? "paid less than one period for the whole path" : undefined);
+        : o.value === RENEW ? (chain ? undefined : "no owed order for this chain at this offer before it")
+        : genesisReason(sdk, o);
       if (reason) { voidOf(o, reason); continue; }
-      if (o.value === RENEW) { payments.push(o); continue; }
-      const at = `${o.host}/${o.id}/${o.path}`;
-      if (!chains.has(at)) chains.set(at, { first: o, owed: [] });
-      const chain = chains.get(at);
-      if (chain.first.genesis.cid !== o.genesis.cid) { voidOf(o, "another genesis holds this path at this host"); continue; }
+      const genesis = o.value === RENEW ? chain.genesis : o.genesis;
+      const price = pathPrice(terms, [...aboveSpecs, genesis.spec]);
+      if (o.paid < price) { voidOf(o, "paid less than one period for the whole path"); continue; }
+      if (o.value === RENEW) { pay(chain, o, price, terms); verdicts.set(o.key, { kind: "renewal", order: { landed: o.landed, paid: o.paid } }); continue; }
+      if (chain && chain.genesis.cid !== o.genesis.cid) {
+        if (o.landed < chain.until) { voidOf(o, "another genesis holds this path at this host while it is paid"); continue; }
+        chain = undefined;
+      }
+      if (!chain) { chain = { genesis: o.genesis, until: 0n, owed: [] }; chains.set(at, chain); held.push(chain); }
+      pay(chain, o, price, terms);
       chain.owed.push(o);
-      payments.push(o);
     } catch (e) { voidOf(o, `the order could not be judged: ${e.message}`); }
   }
-  const paidUntil = new Map();
-  for (const p of payments.sort(byLanding)) {
-    const key = `${p.host}/${p.id}/${p.path}`;
-    const chain = chains.get(key);
-    if (!chain || p.landed < chain.first.landed) {
-      if (p.value === RENEW) voidOf(p, "no owed order for this chain at this offer before it");
-      continue;
-    }
-    const terms = parseOffer(p.terms);
-    const price = pathPrice(terms, [...pathFromNexus(p.path).slice(0, -1).map((q) => specs.get(q)), chain.first.genesis.spec]);
-    if (p.paid < price) { voidOf(p, "paid less than one period for the whole path"); continue; }
-    const end = paidUntil.get(key) ?? 0n;
-    paidUntil.set(key, (end > p.landed ? end : p.landed) + (p.paid / price) * terms.period);
-    if (p.value === RENEW) verdicts.set(p.key, { kind: "renewal", order: { landed: p.landed, paid: p.paid } });
-  }
-  for (const [key, chain] of chains) {
-    const until = paidUntil.get(key);
-    for (const o of chain.owed) verdicts.set(o.key, { kind: "owed", from: o.landed, until, active: height < until, order: { landed: o.landed, paid: o.paid }, genesis: o.genesis.cid, pins: o.genesis.pins });
+  for (const { until, owed } of held) {
+    for (const o of owed) verdicts.set(o.key, { kind: "owed", from: o.landed, until, active: height < until, order: { landed: o.landed, paid: o.paid }, genesis: o.genesis.cid, pins: o.genesis.pins });
   }
   return verdicts;
 }
@@ -88,7 +86,8 @@ export function judge({ sdk, height, orders, market, specs = new Map() }) {
 /**
  * Each order's genesis as checked, by order key: an order is written once,
  * so it is decoded once. The value is kept beside it, so another value under
- * the same key (another market) is checked again.
+ * the same key (another market) is checked again. Each `judge` drops the
+ * keys its orders no longer hold.
  */
 const checked = new Map();
 

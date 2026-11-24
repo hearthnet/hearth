@@ -13,8 +13,9 @@ import { formatBytes } from "./hearth.mjs";
  * nodes it lists): `{ mine, verdicts, owed, until, released, counts,
  * earned }`, `owed` mapping each chain owed now to the genesis the first
  * owed order there carries (`{ cid, volumes, modules, proofs }`, as
- * `parseOrderValue` reads it), `released` the Volumes and modules launched
- * for a chain no longer owed that no chain owed now needs: what to unpin.
+ * `parseOrderValue` reads it), `released` the Volumes and modules of chains
+ * no longer owed that no chain owed now needs (none while any order is
+ * unpriced or could not be judged): what to unpin.
  */
 export async function judgeOwn({ sdk, n, m, self, market, chains = chainReaders(sdk, n) }) {
   const mine = m.orders.filter((o) => o.host === self).sort(byLanding);
@@ -33,7 +34,9 @@ export async function judgeOwn({ sdk, n, m, self, market, chains = chainReaders(
   }
   const counts = {};
   for (const v of verdicts.values()) counts[v.kind] = (counts[v.kind] ?? 0) + 1;
-  return { mine, verdicts, owed, until, released: [...ended].filter((cid) => !kept.has(cid)), counts, earned: earnings({ self, mine, verdicts }) };
+  // Nothing is released while any order could not be judged: it may be owed.
+  const unsure = [...verdicts.values()].some((v) => v.kind === "unpriced" || v.reason?.startsWith("the order could not be judged"));
+  return { mine, verdicts, owed, until, released: unsure ? [] : [...ended].filter((cid) => !kept.has(cid)), counts, earned: earnings({ self, mine, verdicts }) };
 }
 
 /**

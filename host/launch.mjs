@@ -2,6 +2,7 @@
 // carries: the node stores the genesis's Volumes and policy modules as
 // operator pins, then takes the genesis block with its child-only proofs as
 // a header synced from a peer would carry them (`POST /child-blocks`).
+import { readFileSync, writeFileSync } from "node:fs";
 import * as sdk from "../vendor/lattice-sdk.js";
 
 const base64 = (bytes) => Buffer.from(bytes).toString("base64");
@@ -39,14 +40,27 @@ export async function launch({ rpc, path, genesis }) {
   return body.status;
 }
 
+/** The CIDs this seller's launches pinned, kept in `file` (a JSON list). */
+export function launchPins(file) {
+  let cids = [];
+  try { cids = JSON.parse(readFileSync(file, "utf8")); } catch {}
+  const set = new Set(cids);
+  return { has: (cid) => set.has(cid), add(cids) { for (const c of cids) set.add(c); this.save(); }, delete(cid) { set.delete(cid); this.save(); }, save: () => writeFileSync(file, JSON.stringify([...set].sort())) };
+}
+
+/** What launching `genesis` pins: each Volume and each module. */
+export const genesisPins = (genesis) => [...new Set([...Object.keys(genesis.volumes), ...Object.keys(genesis.modules)])];
+
 /**
- * Unpins each of `released` (as `judgeOwn` lists them) that the node still
- * pins (`GET /pins`, then `DELETE /pins/<cid>`). Returns those it unpinned.
+ * Unpins each of `released` (as `judgeOwn` lists them) that this seller's
+ * launches pinned (`pinned`, `launchPins`) and the node still pins (`GET
+ * /pins`, then `DELETE /pins/<cid>`). Returns those it unpinned.
  */
-export async function unpin({ rpc, released }) {
-  if (!released.length) return [];
+export async function unpin({ rpc, released, pinned }) {
+  const mine = released.filter((cid) => pinned.has(cid));
+  if (!mine.length) return [];
   const { body } = await rpc("/pins");
-  const gone = released.filter((cid) => (body.pins ?? []).includes(cid));
-  for (const cid of gone) await rpc(`/pins/${cid}`, undefined, "DELETE");
+  const gone = mine.filter((cid) => (body.pins ?? []).includes(cid));
+  for (const cid of gone) { await rpc(`/pins/${cid}`, undefined, "DELETE"); pinned.delete(cid); }
   return gone;
 }

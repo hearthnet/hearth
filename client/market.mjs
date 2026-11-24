@@ -10,6 +10,9 @@ export async function receiptStorageKey(key) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** Blocks above a landing before a reader keeps it. */
+const RECENT = 100n;
+
 /** The most blocks a reader keeps what `recentBlocks` read of. */
 const BLOCK_FACTS = 5000;
 
@@ -61,10 +64,12 @@ export function reader(sdk, node, { fetchImpl = (...a) => fetch(...a), cache } =
   /**
    * Where an order landed: the lowest market height whose state holds its
    * key (bisected: a key is written once and never removed), and the
-   * offer's text in that block.
+   * offer's text in that block. Kept once RECENT blocks are above it; a
+   * more recent landing is read again (a reorganization may move it).
    */
   async function landing(chainPath, key, ref, height) {
-    if (landings.has(key)) return landings.get(key);
+    const kept = landings.get(key);
+    if (kept && kept.landed + RECENT <= height) return kept;
     let lo = 0n, hi = height;
     while (lo < hi) {
       const mid = (lo + hi) / 2n;

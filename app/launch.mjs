@@ -20,6 +20,18 @@ export function chosenTerms({ offers, shown, now, name = (host) => host }) {
 }
 
 /**
+ * Throws when a chosen offer (`[{ host, id }]`) holds `path` for a genesis
+ * still paid for (an order there `owed` and `active` in `verdicts`): a new
+ * genesis landing there now would be void (client/verdict.mjs).
+ */
+export function heldCheck({ chosen, orders, verdicts, path, name = (host) => host }) {
+  for (const { host, id } of chosen) {
+    const holder = orders.find((o) => o.host === host && o.id === id && o.path === path && verdicts.get(o.key)?.kind === "owed" && verdicts.get(o.key).active);
+    if (holder) throw new Error(`${name(host)} hosts another genesis of ${path} until market block ${verdicts.get(holder.key).until}; pick another name or host.`);
+  }
+}
+
+/**
  * Throws when a chosen offer (`[{ host, id, terms }]`, `terms` its text as
  * the buyer saw it) is gone or has other terms in `offers` (`<host>/<id>` →
  * text now), or when `payer` already has an order for `path` at one of these

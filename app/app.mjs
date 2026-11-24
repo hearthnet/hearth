@@ -16,7 +16,7 @@ import { judge } from "../client/verdict.mjs";
 import { RENEW, parseOffer, parseOrderKey, moduleCID, isAddress, burnAddress, pathFromNexus, pathPrice } from "../client/records.mjs";
 import { snippet } from "./snippet.mjs";
 import { uniqueNodes, nodesNow, chooseAnchor, disagreeMessage, blocksTime, CHECKPOINT_AFTER, WALK } from "./anchor.mjs";
-import { chosenTerms, launchAttempt } from "./launch.mjs";
+import { chosenTerms, heldCheck, launchAttempt } from "./launch.mjs";
 import { chainSpec, mintGenesis, BLOCK_REWARD } from "./genesis.mjs";
 import { once } from "./once.mjs";
 import { creditedHashrate, formatRate } from "../client/mining.mjs";
@@ -520,6 +520,7 @@ async function viewLaunch(view, _, current) {
       if (await parent.hasChild(now.parent, now.name)) throw new Error(`${path} is already a chain; pick another name.`);
       const fresh = await loadMarket(true);
       if (owedNow(fresh).some((o) => o.path === path && o.payer !== me.address)) throw new Error(`Someone else has paid hosts for ${path}; pick another name.`);
+      heldCheck({ chosen: offers, orders: fresh.orders, verdicts, path, name: hostName });
       // The genesis, on the parent's state now.
       button.textContent = "Making your chain…";
       const { buildChildGenesis } = await genesisBuilder();

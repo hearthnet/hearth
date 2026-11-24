@@ -35,7 +35,9 @@
 // (`If-Match`, or `If-None-Match: *` when there was none). A chain whose paid
 // time ran out is left out, and the node stops it unless another layer lists
 // it; what it stored stays, but the pins launching it made go (`DELETE
-// /pins/<cid>`, each Volume and module no chain owed now needs). Each owed
+// /pins/<cid>`, each Volume and module no chain owed now needs, of those
+// its launches pinned, listed in `launch-pins.json` beside its key; never
+// in a pass where an order could not be judged). Each owed
 // chain it has not launched in this process it then launches from the
 // genesis its order carries (host/launch.mjs), every pass until the node
 // weighs the genesis. The specs above each ordered path come from its node,
@@ -82,7 +84,7 @@ const { offerWrite, recordsBody, submit, keyFileJSON } = await import(join(HERE,
 const { ordered, sellerChains, fundingMessage, fundingStep, burn, burnChain, parseAmount, rpcPort, nodeSecret, authedFetch,
   nodeVersion, chainSync, ensureKey, operatorRPC, sellerFiles, startsReopened, parseSize, offerTerms, DEFAULT_STORAGE_RATE, DEFAULT_STORAGE_BUDGET } = await import(join(HERE, "hearth.mjs"));
 const { judgeOwn, report, REMOTE_STORAGE } = await import(join(HERE, "status.mjs"));
-const { launch, unpin } = await import(join(HERE, "launch.mjs"));
+const { genesisPins, launch, launchPins, unpin } = await import(join(HERE, "launch.mjs"));
 const { miner } = await import(join(HERE, "pace.mjs"));
 const { sponsorAnswers, sponsorArgs, sponsorBinary, sponsorStorage, supervise } = await import(join(HERE, "sponsor.mjs"));
 
@@ -233,6 +235,8 @@ async function ensureBurn() {
 let checked = false, syncLine, sponsor, mine, funded = false, fundLine;
 /** The owed chains whose genesis the node has weighed, since this process started. */
 const launched = new Set();
+/** What its launches pinned, beside its key: all it ever unpins. */
+const pinned = launchPins(join(dirname(resolve(args.key)), "launch-pins.json"));
 
 /** The sponsor beside the node, started once the seller's key is funded (`fund`). */
 function startSponsor() {
@@ -318,7 +322,7 @@ async function pass() {
   const judged = await judgeOwn({ sdk, n, m, self, market: marketPath, chains: chainsOf(n) });
   const { owed } = judged;
   // What launching a chain no longer owed pinned, and no owed chain needs.
-  try { for (const cid of await unpin({ rpc, released: judged.released })) log("unpinned", cid, "(no chain owed now needs it)"); }
+  try { for (const cid of await unpin({ rpc, released: judged.released, pinned })) log("unpinned", cid, "(no chain owed now needs it)"); }
   catch (e) { log("could not unpin what ended chains pinned (will retry)", e.message); }
   // A chain owed again later is launched again: its pins went.
   for (const path of launched) if (!owed.has(path)) launched.delete(path);
@@ -344,6 +348,7 @@ async function pass() {
   for (const path of ordered([...owed.keys()])) {
     if (launched.has(path)) continue;
     try {
+      pinned.add(genesisPins(owed.get(path)));
       const status = await launch({ rpc, path, genesis: owed.get(path) });
       if (status === "tree") { launched.add(path); log("launched", path, owed.get(path).cid); }
       else log("launching", path, `(the node holds its genesis as ${status}; again next pass)`);
