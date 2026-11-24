@@ -1142,7 +1142,13 @@ async function viewOrder(view, key, current) {
         if (e.code === "disagree" && now.length) throw new Error(disagreeMessage(now));
         throw e;
       }
-    } catch (e) { note.style.color = "var(--bad)"; note.textContent = `The test write failed: ${e.message}`; }
+    } catch (e) {
+      note.style.color = "var(--bad)";
+      // A sponsor pays fees from its coin on this chain, which its blocks pay it: on a chain just launched it has none yet.
+      note.textContent = /insufficientFloat/.test(e.message)
+        ? "The test write failed: your hosts' sponsors hold no coin on this chain yet. The blocks they make pay them, so try again in a few minutes."
+        : `The test write failed: ${e.message}`;
+    }
   });
   // A renewal in flight outlives this render (the page re-renders every 15 s): its note is kept by order.
   const say = (text) => { renewing.set(o.key, text); const el = $("#renewNote"); if (el && current()) el.textContent = text; };
