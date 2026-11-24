@@ -172,12 +172,16 @@ if (verb === "burn") {
   process.exit(0);
 }
 
-/** The pid of the `lattice up --root <root>` that the seller `pid`'s parent (its `hearth sell`) runs, or undefined. */
+/**
+ * The pid of the node the seller `pid`'s parent (its `hearth sell`) runs on
+ * `root`: that parent's other child on the root (`lattice up` may become
+ * `lattice-node`), or undefined.
+ */
 function sellerNode(pid, root) {
   try {
     const rows = execFileSync("ps", ["-A", "-ww", "-o", "pid=,ppid=,command="], { encoding: "utf8" }).split("\n").map((l) => l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)).filter(Boolean);
     const parent = rows.find(([, p]) => Number(p) === pid)?.[2];
-    return Number(rows.find(([, , pp, cmd]) => pp === parent && cmd.includes(`up --root ${root}`))?.[1]) || undefined;
+    return Number(rows.find(([, p, pp, cmd]) => pp === parent && Number(p) !== pid && cmd.includes(`--root ${root}`))?.[1]) || undefined;
   } catch { return undefined; }
 }
 
