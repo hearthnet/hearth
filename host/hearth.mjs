@@ -194,6 +194,7 @@ export function checkSellFlags(a) {
     throw new Error(`--parent is a chain path from Nexus, e.g. Nexus, not ${a.parent}`);
   }
   const offerId = a.price ? offerFromFlags({ price: a.price, parent: a.parent, chains: a.chains, id: a.id }).id : undefined;
+  if (a.proof && !a.url) throw new Error("--proof goes with --url");
   if (a.public && a["key-only"]) throw new Error("give --public or --key-only, not both");
   if (a["key-only"] && (a.url || a.proof || a["sponsor-url"])) throw new Error("--key-only writes no URL: leave out --url, --proof and --sponsor-url");
   if (a.public && (a.url || a.proof || a["sponsor-url"])) throw new Error("--public makes the URL itself: leave out --url, --proof and --sponsor-url");

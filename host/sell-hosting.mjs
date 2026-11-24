@@ -299,8 +299,10 @@ async function ensureOffer(m, newest) {
   }
   if (!urlValue && m.urlValues.has(self)) {
     // Sold with no URL: a url record from before (an old tunnel's, say) would hide the host's offers.
-    log("removing the url record: selling with no URL", await send([{ key: urlKey(self), oldValue: m.urlValues.get(self) }]));
-    return true;
+    // Tried each pass, never in the way of hosting what is paid for.
+    try { log("removing the url record: selling with no URL", await send([{ key: urlKey(self), oldValue: m.urlValues.get(self) }])); }
+    catch (e) { log(`could not remove the url record yet: ${e.message}`); }
+    return false;
   }
   if (urlValue && m.urlValues.get(self) !== urlValue) {
     log("writing url", await send([{ key: urlKey(self), ...(m.urlValues.has(self) ? { oldValue: m.urlValues.get(self) } : {}), newValue: urlValue }]));

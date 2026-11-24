@@ -45,6 +45,23 @@ test("the proxy forwards no header a client could pose as another address with, 
   } finally { proxy.close(); node.close(); }
 });
 
+test("a body stays framed though Connection names content-length: one request reaches the node, never two", async () => {
+  const { connect } = await import("node:net");
+  const seen = [];
+  const node = await new Promise((ok) => { const s = createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { seen.push({ url: req.url, body: b }); res.end("ok"); }); }); s.listen(0, "127.0.0.1", () => ok(s)); });
+  const proxy = await startProxy({ nodePort: node.address().port, sponsorPort: 1, seller: "bafyseller" });
+  try {
+    const inner = "GET /smuggled HTTP/1.1\r\nHost: x\r\n\r\n";
+    await new Promise((ok) => {
+      const c = connect(proxy.port, "127.0.0.1", () => c.write(`GET /api/x HTTP/1.1\r\nHost: x\r\nConnection: content-length\r\nContent-Length: ${inner.length}\r\n\r\n${inner}`));
+      c.on("data", () => { c.end(); ok(); });
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepEqual(seen.map((x) => x.url), ["/api/x"], "no second request");
+    assert.equal(seen[0].body, inner, "the body arrives as the body");
+  } finally { proxy.close(); node.close(); }
+});
+
 test("the proxy says which side does not answer", async () => {
   const proxy = await startProxy({ nodePort: 1, sponsorPort: 1, seller: "bafyseller" });
   try {

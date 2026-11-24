@@ -141,9 +141,17 @@ async function nodeRoot({ create = false, install = false } = {}) {
     // Public (read by anyone through the tunnel, taking their writes) or not, set before the node starts.
     initManagedNode({ home, lattice: a.lattice });
     a.public ??= defaultPublic();
-    // --key-only closes the port the tunnel used; --url leaves it as the operator set it (a domain's proxy may use it).
-    if (a.public) execFileSync(a.lattice, ["config", "set", `publicRead=${PUBLIC_READ_PORT}`, "publicSubmit=true", "--root", root], { stdio: "ignore" });
-    else if (a["key-only"]) execFileSync(a.lattice, ["config", "unset", "publicRead", "publicSubmit", "--root", root], { stdio: "ignore" });
+    // The port the tunnel uses is Hearth's to open and close: opened for --public (and a mark left), closed
+    // when not public if Hearth opened it (or --key-only says so); one the operator set stays.
+    const mark = join(root, "hearth/public-port");
+    if (a.public) {
+      execFileSync(a.lattice, ["config", "set", `publicRead=${PUBLIC_READ_PORT}`, "publicSubmit=true", "--root", root], { stdio: "ignore" });
+      mkdirSync(dirname(mark), { recursive: true });
+      writeFileSync(mark, "opened by hearth sell for its tunnel\n");
+    } else if (a["key-only"] || existsSync(mark)) {
+      execFileSync(a.lattice, ["config", "unset", "publicRead", "publicSubmit", "--root", root], { stdio: "ignore" });
+      rmSync(mark, { force: true });
+    }
   }
   if (install) return initManagedNode({ home, lattice: a.lattice });
   // The seller keeps its node up; another verb runs it for as long as it takes.
