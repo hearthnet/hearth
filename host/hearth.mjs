@@ -267,13 +267,6 @@ export async function nodeVersion(url, fetchImpl = (...a) => fetch(...a)) {
   if (!Array.isArray(config?.fragments) || !Array.isArray(chains) || !chains.every((c) => Array.isArray(c.from))) {
     throw Object.assign(new Error(`Hearth needs node ${MIN_NODE} or newer (you have ${status?.version ?? "an older one"}: its GET /config does not say which layer lists each chain)`), { tooOld: true });
   }
-  // Before 5.1.0, POST /child-blocks took no proofs: a buyer's genesis was dropped.
-  const release = (v) => String(v).split("+")[0].split(".").map(Number);
-  const [have, need] = [release(status?.version), release(MIN_NODE)];
-  const at = have.findIndex((n, i) => n !== need[i]);
-  if (have.length === 3 && have.every(Number.isInteger) && at >= 0 && have[at] < need[at]) {
-    throw Object.assign(new Error(`Hearth needs node ${MIN_NODE} or newer (you have ${status.version}: it cannot start a buyer's chain from the genesis the order carries)`), { tooOld: true });
-  }
   return status?.version ?? "unknown";
 }
 

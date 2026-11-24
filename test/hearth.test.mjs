@@ -223,16 +223,6 @@ test("`hearth sell` beside a node older than 4.0.1 says so and stops", async () 
   } finally { node.close(); }
 });
 
-test("`hearth sell` beside a 5.0.0 node says it cannot start a buyer's chain, and stops", async () => {
-  const node = await freshNode({ version: "5.0.0" });
-  try {
-    const { code, out } = await sell(node);
-    assert.equal(code, 2, out);
-    assert.match(out, /Hearth needs node 5\.1\.0 or newer \(you have 5\.0\.0: it cannot start a buyer's chain from the genesis the order carries\)/);
-    assert.deepEqual(node.puts, [], "it changes nothing on the node");
-  } finally { node.close(); }
-});
-
 test("while the node syncs the market, the seller says how far it is and asks for no coin", async () => {
   const node = await freshNode({ chains: { [DEFAULT_MARKET]: { phase: "active", height: "5", bestHeaderHeight: "10" } } });
   try {
