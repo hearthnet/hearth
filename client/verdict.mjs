@@ -24,14 +24,14 @@
 // one period, paid to the host. Which genesis holds a path on Lattice is
 // Lattice's to decide (work, and a parent's commitment when the buyer makes
 // one), not the market's.
-import { RENEW, parseGenesis, parseOffer, parseOrderValue, pathFromNexus, pathPrice } from "./records.mjs";
+import { isRenewal, parseGenesis, renewedGenesis, parseOffer, parseOrderValue, pathFromNexus, pathPrice } from "./records.mjs";
 
 export const byLanding = (a, b) => (a.landed !== b.landed ? (a.landed < b.landed ? -1 : 1) : a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 
 /**
  * `orders`: `[{ key, host, id, payer, paid, path, value, landed, terms }]`
  * as `market` returns them: `value` the record's text (the genesis, or
- * RENEW for a renewal), `landed` the market height it landed at, `terms`
+ * `renew <genesis>` for a renewal), `landed` the market height it landed at, `terms`
  * the offer's text in that block. `market` is the market chain's path.
  * `specs`: `Map(path → spec)` of the chains above each ordered path (Nexus
  * first); an order whose path has one missing is `unpriced` until a reader
@@ -62,13 +62,15 @@ export function judge({ sdk, height, orders, market, specs = new Map() }) {
       // of them is void before its genesis is decoded.
       const reason = !terms ? "the offer's terms do not parse"
         : o.paid < pathPrice(terms, aboveSpecs) ? "paid less than one period for the whole path"
-        : o.value === RENEW ? (chain ? undefined : "no owed order for this chain at this host before it")
+        : isRenewal(o.value) ? (!chain ? "no owed order for this chain at this host before it"
+          : renewedGenesis(o.value) === undefined ? "the renewal names no genesis"
+          : renewedGenesis(o.value) !== chain.genesis.cid ? "the renewal names another genesis than the one holding this path at this host" : undefined)
         : genesisReason(sdk, o);
       if (reason) { voidOf(o, reason); continue; }
-      const genesis = o.value === RENEW ? chain.genesis : o.genesis;
+      const genesis = isRenewal(o.value) ? chain.genesis : o.genesis;
       const price = pathPrice(terms, [...aboveSpecs, genesis.spec]);
       if (o.paid < price) { voidOf(o, "paid less than one period for the whole path"); continue; }
-      if (o.value === RENEW) { pay(chain, o, price, terms); verdicts.set(o.key, { kind: "renewal", order: { landed: o.landed, paid: o.paid } }); continue; }
+      if (isRenewal(o.value)) { pay(chain, o, price, terms); verdicts.set(o.key, { kind: "renewal", order: { landed: o.landed, paid: o.paid } }); continue; }
       if (chain && chain.genesis.cid !== o.genesis.cid) {
         if (o.landed < chain.until) { voidOf(o, "another genesis holds this path at this host while it is paid"); continue; }
         chain = undefined;

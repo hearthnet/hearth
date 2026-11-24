@@ -1,7 +1,7 @@
 // The one transaction that launches a chain at several hosts: an order at
 // each chosen offer, all naming the same path and carrying the same genesis.
 import { orderWrite, recordsBody } from "../client/tx.mjs";
-import { RENEW, parseOffer } from "../client/records.mjs";
+import { isRenewal, parseOffer } from "../client/records.mjs";
 
 /**
  * The offers the buyer chose (`[{ k, host, id }]`, `k` `<host>/<id>`), each
@@ -41,7 +41,7 @@ export function heldCheck({ chosen, orders, verdicts, path, name = (host) => hos
  */
 export function launchCheck({ chosen, offers, orders, payer, path, name = (host) => host }) {
   for (const { host, id, terms } of chosen) {
-    if (orders.some((o) => o.host === host && o.path === path && o.payer === payer && o.value !== RENEW)) throw new Error(`You already paid for ${path} at ${name(host)}: see Your apps.`);
+    if (orders.some((o) => o.host === host && o.path === path && o.payer === payer && !isRenewal(o.value))) throw new Error(`You already paid for ${path} at ${name(host)}: see Your apps.`);
     const now = offers.get(`${host}/${id}`);
     if (now === undefined) throw new Error(`The offer at ${name(host)} has closed; choose again.`);
     if (now !== terms || !parseOffer(terms)) throw new Error(`${name(host)} changed its terms; review again.`);

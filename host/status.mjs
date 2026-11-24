@@ -42,19 +42,13 @@ export async function judgeOwn({ sdk, n, m, self, market, hosted = [], chains = 
 }
 
 /**
- * What the seller hosts this pass, from `owed` (`judgeOwn`), `unsure`
- * (`judgeOwn`), `hosted` (the paths its fragment lists now) and `runs`
- * (path → the genesis the node runs there, as its chain info names it):
- * `{ list, launch, switching }`. A path owed for a genesis other than the
- * one the node runs is `switching`: left out of the fragment for this pass,
- * so the node lets that chain go, and launched once the node runs none
- * there. A hosted path that is unsure stays listed: only a lapse or a void
- * drops a chain, never a spec not read yet.
+ * The chains the seller lists this pass: every path owed now (`owed`,
+ * `judgeOwn`), and each it hosts now (`hosted`) that is `unsure`
+ * (`judgeOwn`): only a lapse or a void drops a chain, never a spec not
+ * read yet.
  */
-export function hostingPlan({ owed, unsure, hosted, runs }) {
-  const switching = [...owed.keys()].filter((p) => runs.get(p) !== undefined && runs.get(p) !== owed.get(p).cid);
-  const launch = [...owed.keys()].filter((p) => !switching.includes(p));
-  return { list: [...new Set([...launch, ...unsure.filter((p) => hosted.includes(p) && !owed.has(p))])], launch, switching };
+export function hostingList({ owed, unsure, hosted }) {
+  return [...new Set([...owed.keys(), ...unsure.filter((p) => hosted.includes(p))])];
 }
 
 /**

@@ -3,10 +3,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as sdk from "../vendor/lattice-sdk.js";
-import { RENEW, chainPrice, formatOffer, formatOrderValue, orderKey, parseGenesis, parseOffer, parseOrderKey, parseOrderValue, pathPrice } from "../client/records.mjs";
+import { RENEW, renewValue, chainPrice, formatOffer, formatOrderValue, orderKey, parseGenesis, parseOffer, parseOrderKey, parseOrderValue, pathPrice } from "../client/records.mjs";
 import { holderOf, judge } from "../client/verdict.mjs";
-import { earnings, hostingPlan, judgeOwn } from "../host/status.mjs";
-import { launch, launchPins, launchPinsFile, unpin } from "../host/launch.mjs";
+import { renewWrite } from "../client/tx.mjs";
+import { earnings, hostingList, judgeOwn } from "../host/status.mjs";
+import { launch, launchOwed, launchPins, launchPinsFile, unpin } from "../host/launch.mjs";
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -33,6 +34,7 @@ const order = ({ n = 0, paid = PRICE, path = PATH, value = VALUE, landed = 10n, 
   return { key: k, ...parseOrderKey(k), value, landed, terms };
 };
 const judged = (orders, { height = 50n, specs = SPECS } = {}) => judge({ sdk, height, orders, market: MARKET, specs });
+const RENEW_G = renewValue(GENESIS);
 const one = (o, opts) => judged([o], opts).get(o.key);
 
 test("an offer is exactly its five lines", () => {
@@ -92,12 +94,12 @@ test("an order waits for the specs above its path", () => {
 
 test("renewals extend paid time at the terms each landed on; one that ran out restarts where it landed", () => {
   const first = order();
-  const renew = order({ n: 1, payer: OTHER, landed: 60n, value: RENEW, paid: PRICE });
-  const late = order({ n: 2, landed: 500n, value: RENEW, paid: PRICE, terms: formatOffer({ ...OFFER, period: 10n }) });
+  const renew = order({ n: 1, payer: OTHER, landed: 60n, value: RENEW_G, paid: PRICE });
+  const late = order({ n: 2, landed: 500n, value: RENEW_G, paid: PRICE, terms: formatOffer({ ...OFFER, period: 10n }) });
   const v = judge({ sdk, height: 600n, orders: [late, renew, first], market: MARKET, specs: SPECS });
   assert.equal(v.get(first.key).until, 500n + 10n);
   assert.equal(v.get(renew.key).kind, "renewal");
-  const early = order({ n: 3, landed: 5n, value: RENEW });
+  const early = order({ n: 3, landed: 5n, value: RENEW_G });
   assert.equal(judge({ sdk, height: 600n, orders: [early, first], market: MARKET, specs: SPECS }).get(early.key).kind, "void", "a renewal before any order");
 });
 
@@ -110,7 +112,7 @@ test("judging never throws on what an order carries: a malformed spec, a renewal
     assert.equal(one(order({ n: 1, value })).kind, "void");
   }
   const first = order();
-  const renewal = order({ n: 2, landed: 20n, value: RENEW, terms: "not terms" });
+  const renewal = order({ n: 2, landed: 20n, value: RENEW_G, terms: "not terms" });
   assert.match(judged([first, renewal]).get(renewal.key).reason, /terms do not parse/);
   // A chain above whose spec does not price: that order is void, the others judged.
   const odd = order({ n: 3, path: "Nexus/odd/app" });
@@ -138,7 +140,7 @@ test("one genesis per path at an offer: the first owed order to land fixes it; a
 test("a host holds a path for one genesis across all its offers; a renewal at any of them pays for it", async () => {
   const other = mint(PATH, { timestamp: 1_900_000_000_000 });
   const first = order({ id: "o2", landed: 10n }), rival = order({ id: "o1", landed: 30n, value: other.value });
-  const renewal = order({ id: "o1", n: 1, payer: OTHER, landed: 40n, value: RENEW });
+  const renewal = order({ id: "o1", n: 1, payer: OTHER, landed: 40n, value: RENEW_G });
   const v = judged([rival, first, renewal]);
   assert.match(v.get(rival.key).reason, /another genesis holds this path at this host while it is paid/);
   assert.equal(v.get(first.key).until, 10n + 200n, "the renewal at the host's other offer pays for the holder");
@@ -154,21 +156,26 @@ test("the page renews only the genesis holding the path at that host: not one an
   assert.equal(holderOf({ orders: [first], verdicts: judged([first], { height: 150n }), host: HOST, path: PATH }), GENESIS, "lapsed, but nobody took over: it may renew");
 });
 
-test("a takeover is launched: the seller lets the old genesis go for a pass, then launches the new one", async () => {
+test("a takeover is pushed once, the path staying hosted: fork choice decides which chain runs it", async () => {
   const other = mint(PATH, { timestamp: 1_900_000_000_000 });
   const a = order({ landed: 10n }), b = order({ n: 1, landed: 120n, value: other.value });
-  const own = await judgeOwn({ sdk, m: { height: 150n, orders: [a, b] }, self: HOST, market: MARKET, hosted: [PATH], chains: { specsDownTo: async () => SPECS } });
-  assert.equal(own.owed.get(PATH).cid, other.cid);
-  const first = hostingPlan({ owed: own.owed, unsure: own.unsure, hosted: [PATH], runs: new Map([[PATH, GENESIS]]) });
-  assert.deepEqual(first, { list: [], launch: [], switching: [PATH] }, "unhosted this pass");
-  const next = hostingPlan({ owed: own.owed, unsure: own.unsure, hosted: [], runs: new Map([[PATH, undefined]]) });
-  assert.deepEqual(next, { list: [PATH], launch: [PATH], switching: [] }, "then listed and launched");
-  assert.deepEqual(hostingPlan({ owed: own.owed, unsure: [], hosted: [PATH], runs: new Map([[PATH, other.cid]]) }).launch, [PATH], "the node runs it: nothing to let go");
+  const judgeAt = (height, orders) => judgeOwn({ sdk, m: { height, orders }, self: HOST, market: MARKET, hosted: [PATH], chains: { specsDownTo: async () => SPECS } });
+  const pushed = [];
+  const rpc = async (route, body) => {
+    if (route === "/child-blocks") { pushed.push(sdk.cidV1DagCbor(Buffer.from(body.block, "base64"))); return { body: { status: "tree" } }; }
+    return { body: { pins: [] } };
+  };
+  const launched = new Set();
+  for (const [height, orders] of [[50n, [a]], [60n, [a]], [150n, [a, b]], [160n, [a, b]]]) {
+    const own = await judgeAt(height, orders);
+    assert.deepEqual(hostingList({ owed: own.owed, unsure: own.unsure, hosted: [PATH] }), [PATH], `hosted at ${height}`);
+    await launchOwed({ rpc, owed: own.owed, launched });
+  }
+  assert.deepEqual(pushed, [GENESIS, other.cid], "each genesis once");
 });
 
 test("uncertainty never drops a chain: a hosted path with an order not judged yet stays listed", () => {
-  const plan = hostingPlan({ owed: new Map(), unsure: ["Nexus/a/app", "Nexus/b/app"], hosted: ["Nexus/a/app"], runs: new Map() });
-  assert.deepEqual(plan.list, ["Nexus/a/app"], "hosted and unsure stays; never hosted is not added");
+  assert.deepEqual(hostingList({ owed: new Map(), unsure: ["Nexus/a/app", "Nexus/b/app"], hosted: ["Nexus/a/app"] }), ["Nexus/a/app"], "hosted and unsure stays; never hosted is not added");
 });
 
 test("owed must be runnable: proofs of this genesis at this path, its children index and spec in its volumes, a path under Nexus apart from the market", () => {
@@ -317,7 +324,7 @@ test("cost: an order short of the chains above is void before its genesis is dec
 
 test("an underpaid renewal is void, and not counted in earnings", () => {
   const first = order();
-  const renewal = order({ n: 1, payer: OTHER, landed: 20n, value: RENEW, paid: PRICE - 1n });
+  const renewal = order({ n: 1, payer: OTHER, landed: 20n, value: RENEW_G, paid: PRICE - 1n });
   const verdicts = judged([first, renewal]);
   assert.match(verdicts.get(renewal.key).reason, /less than one period/);
   assert.equal(verdicts.get(first.key).until, 10n + 100n);
@@ -329,7 +336,7 @@ test("a genesis holds its path at an offer only while it is paid: another genesi
   const first = order({ landed: 10n });                                    // paid to 110
   const early = order({ n: 1, landed: 50n, value: other.value });
   const after = order({ n: 2, landed: 120n, value: other.value });         // paid to 220
-  const renewal = order({ n: 3, payer: OTHER, landed: 130n, value: RENEW });
+  const renewal = order({ n: 3, payer: OTHER, landed: 130n, value: renewValue(other.cid) });
   const v = judged([renewal, after, early, first], { height: 150n });
   assert.match(v.get(early.key).reason, /another genesis holds this path at this host while it is paid/);
   assert.deepEqual([v.get(first.key).kind, v.get(first.key).until, v.get(first.key).active], ["owed", 110n, false]);
@@ -353,4 +360,21 @@ test("the genesis cache drops orders no longer on the market", () => {
   run(b);
   run(a);
   assert.equal(decoded, 3 * once, "a was dropped when b's market no longer held it, so it is decoded again");
+});
+
+test("a renewal names the genesis it pays for: one naming another, or none, is void, so a takeover cannot capture it", () => {
+  const other = mint(PATH, { timestamp: 1_900_000_000_000 });
+  const first = order({ landed: 10n });                                    // paid to 110
+  const takeover = order({ n: 1, landed: 120n, value: other.value });      // holds from 120
+  const late = order({ n: 2, payer: OTHER, landed: 130n, value: renewValue(GENESIS) });
+  const bare = order({ n: 3, payer: OTHER, landed: 40n, value: RENEW });
+  const garbage = order({ n: 4, payer: OTHER, landed: 41n, value: "renew x" });
+  const v = judged([first, takeover, late, bare, garbage], { height: 150n });
+  assert.match(v.get(late.key).reason, /names another genesis than the one holding this path/);
+  assert.equal(v.get(takeover.key).until, 220n, "the takeover's time is not extended by it");
+  assert.equal(v.get(first.key).until, 110n);
+  assert.match(v.get(bare.key).reason, /names no genesis/);
+  assert.match(v.get(garbage.key).reason, /names no genesis/);
+  const w = renewWrite({ host: HOST, id: "o1", terms: TERMS, payer: OTHER, n: 5n, path: PATH, genesis: GENESIS, specs: [SPEC, SPEC, SPEC] });
+  assert.equal(w.actions[1].newValue, `renew ${GENESIS}`);
 });

@@ -1,7 +1,7 @@
 // Transactions for the market, built as the SDK's bodies, signed with one
 // key, and sent to a node. The bodies follow the policy: an order's payment
 // credits come in the order hosts are first owed.
-import { RENEW, formatOffer, offerKey, orderKey, parseOffer, pathPrice } from "./records.mjs";
+import { renewValue, formatOffer, offerKey, orderKey, parseOffer, pathPrice } from "./records.mjs";
 
 const empty = { actions: [], depositActions: [], receiptActions: [], withdrawalActions: [] };
 
@@ -34,8 +34,8 @@ export const closeWrite = ({ host, id, old }) => ({ key: offerKey(host, id), old
 /**
  * The writes and payment for an order: `periods` periods at the offer whose
  * text is `terms` (asserted unchanged, so the order lands only on these
- * terms), for `path`, carrying `value` (`formatOrderValue`, or RENEW to pay
- * for more time on a chain already ordered). `specs` are the specs of every
+ * terms), for `path`, carrying `value` (`formatOrderValue`, or `renewValue` to
+ * pay for more time on a genesis already ordered). `specs` are the specs of every
  * chain on the path, Nexus first, the ordered chain last. `n` tells the
  * payer's orders apart: its nonce on the market chain will do.
  */
@@ -51,8 +51,8 @@ export function orderWrite({ host, id, terms, payer, n, path, value, specs, peri
   };
 }
 
-/** The writes and payment for `periods` more periods of the chain at `path`. */
-export const renewWrite = (o) => orderWrite({ ...o, value: RENEW });
+/** The writes and payment for `periods` more periods of the chain at `path` run from `genesis` (its CID). */
+export const renewWrite = ({ genesis, ...o }) => orderWrite({ ...o, value: renewValue(genesis) });
 
 /** A seller locks `amountDeposited` market coin for `amountDemanded` parent coin. */
 export function depositBody({ seller, nonce, chainPath, depositNonce, amountDemanded, amountDeposited, fee }) {

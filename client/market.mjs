@@ -86,7 +86,7 @@ export function reader(sdk, node, { fetchImpl = (...a) => fetch(...a), cache } =
     /**
      * Offers and orders at the tip of the market chain. `offers` maps
      * `<host>/<id>` to the offer's text now: the terms an order placed now
-     * asserts. `orders` (renewals among them, their value RENEW) each carry
+     * asserts. `orders` (renewals among them, their value `renew <genesis>`) each carry
      * `landed`, the market height it landed at, and `terms`, the offer's
      * text in that block: what `judge` reads.
      */

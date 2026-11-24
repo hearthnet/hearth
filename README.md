@@ -310,7 +310,7 @@ it never reads a record's value.
 | Key | Written by | Value (read off chain) |
 |---|---|---|
 | `offer/<host>/<id>` | the host: written, changed in place, deleted to close | the five lines above |
-| `order/<host>/<id>/<payer>/<n>/<paid>/<path>` | the payer, once; pays the host `<paid>` and asserts the offer unchanged in the same transaction | the genesis as the buyer minted it (its CID, its Volumes and policy modules, and its child-only proofs), or `renew` to pay for more time |
+| `order/<host>/<id>/<payer>/<n>/<paid>/<path>` | the payer, once; pays the host `<paid>` and asserts the offer unchanged in the same transaction | the genesis as the buyer minted it (its CID, its Volumes and policy modules, and its child-only proofs), or `renew <genesis CID>` to pay for more time on that genesis |
 
 **Verdicts** (`client/verdict.mjs`, the same module in the host and the
 page), final once the order is in a block, at the offer's terms in that
@@ -320,8 +320,10 @@ block:
   above it; a genesis that does not check out (its Volumes not exactly its
   own, a spec out of range, or proofs that do not prove this block at this
   path); another genesis landing at that host (any of its offers) and path
-  while the genesis holding it there is still paid for; or less than one period paid for the whole path (a
-  renewal too); an order that cannot be judged is void, never the rest;
+  while the genesis holding it there is still paid for; a renewal naming
+  another genesis than the one holding the path at that host when it
+  lands; or less than one period paid for the whole path (a renewal too);
+  an order that cannot be judged is void, never the rest;
 - **owed**: from the block it landed in, for `floor(paid / price)` periods,
   the price summed over every chain on its path by each chain's spec;
   renewals add time from where it ends.
@@ -351,9 +353,12 @@ the deploy's) lists it, and what it stored stays, but for the genesis pins
 no owed chain needs, which the seller unpins (`DELETE /pins/<cid>`): only
 those its launches made, recorded in `launch-pins-<market>.json` beside
 its key, and none while a chain it hosts has an order not judged yet
-(such a chain stays listed). When another genesis takes a path over at
-the host, the seller leaves the path out for one pass, so the node lets
-the old chain go, then launches the new genesis. The node never restarts
+(such a chain stays listed). One node runs one seller: a seller's
+unpinning knows only its own launches. The seller pushes the paid genesis
+and keeps the path hosted; when another genesis takes a path over at the
+host, it is pushed too. Which chain wins at the path is Lattice's fork
+choice: a buyer who wants the path exclusively commits its genesis in the
+parent chain. The node never restarts
 for it.
 
 Beside the node (loopback and its cookie):

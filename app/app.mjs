@@ -13,7 +13,7 @@ import { loadGenesis } from "../vendor/lattice-genesis.js";
 import { reader } from "../client/market.mjs";
 import { chainReaders, declaredNodes } from "../client/chains.mjs";
 import { holderOf, judge } from "../client/verdict.mjs";
-import { RENEW, parseOffer, parseOrderKey, moduleCID, isAddress, burnAddress, pathFromNexus, pathPrice } from "../client/records.mjs";
+import { isRenewal, parseOffer, parseOrderKey, moduleCID, isAddress, burnAddress, pathFromNexus, pathPrice } from "../client/records.mjs";
 import { snippet } from "./snippet.mjs";
 import { uniqueNodes, nodesNow, chooseAnchor, disagreeMessage, blocksTime, CHECKPOINT_AFTER, WALK } from "./anchor.mjs";
 import { chosenTerms, heldCheck, launchAttempt } from "./launch.mjs";
@@ -174,7 +174,7 @@ async function loadMarket(force = false) {
   return loading;
 }
 /** Orders that launch a chain (not renewals). */
-const launches = (m) => m.orders.filter((o) => o.value !== RENEW);
+const launches = (m) => m.orders.filter((o) => !isRenewal(o.value));
 /** Owed orders still paid for, at `host` (any host when undefined), one per path. */
 const owedNow = (m, host) => [...new Map(launches(m).filter((o) => (host === undefined || o.host === host) && verdicts.get(o.key)?.kind === "owed" && verdicts.get(o.key).active).map((o) => [o.path, o])).values()];
 
@@ -993,7 +993,7 @@ async function viewOrder(view, key, current) {
         const text = fresh.offers.get(k);
         if (text === undefined) throw new Error("This offer has closed: it sells no more time.");
         if (text !== termsNow) throw new Error("The offer's terms changed. Reload to pay at them.");
-        const w = renewWrite({ host: o.host, id: o.id, terms: text, payer: me.address, n: nonce, path: o.path, specs: pathSpecs, periods });
+        const w = renewWrite({ host: o.host, id: o.id, terms: text, payer: me.address, n: nonce, path: o.path, genesis, specs: pathSpecs, periods });
         return recordsBody({ signer: me.address, nonce, chainPath: marketPath, actions: w.actions, payments: w.payments, fee: await fee(cfg.market) });
       });
       $("#renewNote").textContent = "Paid. It counts once it is in a block.";

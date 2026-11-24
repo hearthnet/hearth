@@ -4,8 +4,9 @@
 // tests.
 //
 //   offer/<host>/<id>                          the host's terms, edited in place
-//   order/<host>/<id>/<payer>/<n>/<paid>/<path>  the chain's genesis, or RENEW
-//                                                to pay for more time
+//   order/<host>/<id>/<payer>/<n>/<paid>/<path>  the chain's genesis, or
+//                                                `renew <genesis CID>` to pay
+//                                                for more time on that genesis
 
 const ADDRESS = /^bafyrei[a-z2-7]{52}$/;
 export const isAddress = (text) => typeof text === "string" && ADDRESS.test(text);
@@ -20,8 +21,14 @@ export const parentOf = (path) => path.split("/").slice(0, -1).join("/");
 
 export const offerKey = (host, id) => `offer/${host}/${id}`;
 export const orderKey = ({ host, id, payer, n, paid, path }) => `order/${host}/${id}/${payer}/${n}/${paid}/${path}`;
-/** An order's value when it only pays for more time on a chain already ordered. */
+/** What an order's value starts with when it only pays for more time on a chain already ordered. */
 export const RENEW = "renew";
+/** A renewal's value: `renew <cid>`, naming the genesis it pays for. */
+export const renewValue = (cid) => `${RENEW} ${cid}`;
+/** Whether an order's value is a renewal (a genesis is JSON, so never starts so). */
+export const isRenewal = (value) => typeof value === "string" && value.startsWith(RENEW);
+/** The genesis CID a renewal's value names, or undefined when it is not exactly `renew <cid>`. */
+export const renewedGenesis = (value) => /^renew (bafy[a-z2-7]{50,})$/.exec(value)?.[1];
 
 /** `{ host, id }` from an `offer/` key, or undefined. */
 export function parseOfferKey(key) {

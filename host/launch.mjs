@@ -48,6 +48,25 @@ export async function launch({ rpc, path, genesis, pinned }) {
   return body.status;
 }
 
+/**
+ * Pushes each genesis owed now (`owed`, `judgeOwn`) that `launched` (a Set
+ * of `<path> <genesis>`) does not hold yet, and adds it once the node weighs
+ * it: a genesis that takes a path over is pushed too, once, the path staying
+ * hosted. Which chain the path runs is the node's fork choice.
+ */
+export async function launchOwed({ rpc, owed, launched, pinned, log = () => {} }) {
+  for (const k of launched) { const [p, cid] = k.split(" "); if (owed.get(p)?.cid !== cid) launched.delete(k); }
+  for (const [path, genesis] of [...owed].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    const at = `${path} ${genesis.cid}`;
+    if (launched.has(at)) continue;
+    try {
+      const status = await launch({ rpc, path, genesis, pinned });
+      if (status === "tree") { launched.add(at); log("launched", path, genesis.cid); }
+      else log("launching", path, `(the node holds its genesis as ${status}; again next pass)`);
+    } catch (e) { log("the node did not take the genesis of", path, `(again next pass): ${e.message}`); }
+  }
+}
+
 /** Where a seller keeps what its launches pinned for `market`: one file per market, beside its key. */
 export const launchPinsFile = (dir, market) => join(dir, `launch-pins-${market.replaceAll("/", "_")}.json`);
 
