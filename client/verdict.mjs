@@ -33,6 +33,7 @@
 // paid, not served.
 import { SETTLE, CREATED_WINDOW, inForce, isClosed, parseOffer, parsePayload, parentOf, pathPrice, moduleCID, parseStorageOffer, parseStorageOrderValue, isRootCID } from "./records.mjs";
 
+const NO_END = 1n << 128n;  // a path no other order has taken: every payment counts
 const byHeight = (a, b) => (a.created !== b.created ? (a.created < b.created ? -1 : 1) : a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 
 /**
@@ -60,7 +61,33 @@ export function judge({ sdk, height, versions, orders, renewals = [], genesis = 
   settled.sort(byHeight);
 
   const counted = new Map();  // offer → Set of chains it sold
-  const firstAtPath = new Map();  // path → the earliest non-void, non-full order for it, at any host
+  const holders = new Map();  // path → { first, era, accepted }: the order holding it, from which era, and its orders since
+  const eraEnds = new Map();  // `<path>#<era>` → the market block the next era's first order was keyed at
+  // Paid time a chain bought by `before`: its orders and renewals keyed before then, oldest first, each at
+  // the version in force at its own height. A renewal of a chain whose paid time had run out counts only
+  // once settled, so a payment that could keep a name from the next buyer is fixed before that buyer is judged.
+  const paidUntil = (chainOrders, chainRenewals, before) => {
+    const key = `${chainOrders[0].host}/${chainOrders[0].id}`, start = chainOrders[0].created;
+    const payments = [...chainOrders, ...chainRenewals.filter((r) => r.created >= start)]
+      .filter((p) => p.created < before)
+      .map((p) => ({ ...p, terms: termsAt(key, p.created) }))
+      .filter((p) => p.terms && !isClosed(p.terms))
+      .sort(byHeight);
+    let end = 0n;
+    for (const p of payments) {
+      const lapsed = end <= p.created;
+      if (lapsed && p.renewal && height < p.created + SETTLE) continue;
+      end = (lapsed ? p.created : end) + (p.paid / pathPrice(p.terms, p.path)) * p.terms.period;
+    }
+    return end < ends(key) ? end : ends(key);
+  };
+  const renewalsOf = (o) => renewals.filter((r) => r.host === o.host && r.id === o.id && r.path === o.path).map((r) => ({ ...r, renewal: true }));
+  // A path's holder still has paid time at `c`: any of its chains, from what was paid before `c`.
+  const holds = (h, c) => {
+    const chains = new Map();
+    for (const a of h.accepted) chains.has(`${a.host}/${a.id}`) ? chains.get(`${a.host}/${a.id}`).push(a) : chains.set(`${a.host}/${a.id}`, [a]);
+    return [...chains.values()].some((os) => paidUntil(os, renewalsOf(os[0]), c) > c);
+  };
   const owed = new Map();  // `<host>/<id>/<path>` → { offer, orders } owed for that chain
   for (const o of settled) {
     const key = `${o.host}/${o.id}`;
@@ -69,12 +96,12 @@ export function judge({ sdk, height, versions, orders, renewals = [], genesis = 
       : !offer ? `no version of the offer was in force at market block ${o.created} (a version takes effect ${CREATED_WINDOW} blocks after it is written)`
       : voidReason(sdk, o, offer);
     if (reason) { verdicts.set(o.key, { kind: "void", reason, order: o.order }); continue; }
-    // The first order decides the path, from the orders alone: a genesis a
-    // reader knows never changes which order is first.
-    const first = firstAtPath.get(o.path);
-    if (first && first.payloadText !== o.payloadText) {
-      const elsewhere = first.host !== o.host;
-      verdicts.set(o.key, { kind: "taken", elsewhere, reason: `an earlier order for the path${elsewhere ? ", at another host," : " at this host"} named another payload`, order: o.order });
+    // The first order holds the path while its chain has paid time; once that has run out, the next order
+    // takes it. Read from the orders alone: a genesis a reader knows never changes who holds it.
+    const h = holders.get(o.path);
+    if (h && h.first.payloadText !== o.payloadText && holds(h, o.created)) {
+      const elsewhere = h.first.host !== o.host;
+      verdicts.set(o.key, { kind: "taken", elsewhere, reason: `an earlier order for the path${elsewhere ? ", at another host," : " at this host"} named another payload, and has paid time`, order: o.order });
       continue;
     }
     // Only an order that can win the path takes one of the offer's chains.
@@ -85,26 +112,27 @@ export function judge({ sdk, height, versions, orders, renewals = [], genesis = 
       if (BigInt(sold.size) >= offer.capacity) { verdicts.set(o.key, { kind: "full", reason: `the offer had sold its ${offer.capacity} chains`, order: o.order }); continue; }
       sold.add(chain);
     }
-    if (!first) firstAtPath.set(o.path, o);
-    const facts = genesis.get(o.path);
+    if (!h || h.first.payloadText !== o.payloadText) {
+      if (h) eraEnds.set(`${o.path}#${h.era}`, o.created);
+      holders.set(o.path, { first: o, era: h ? h.era + 1 : 0, accepted: [] });
+    }
+    const holder = holders.get(o.path);
+    holder.accepted.push(o);
+    // A known genesis guards only the path's first holder: a later one follows a chain whose time ran out.
+    const facts = holder.era === 0 ? genesis.get(o.path) : undefined;
     if (facts && !sameGenesis(sdk, facts, o.payload)) {
       verdicts.set(o.key, { kind: "taken", reason: "the path holds a genesis not built from this payload", order: o.order });
       continue;
     }
-    const chainAt = `${o.host}/${o.id}/${o.path}`;
+    const chainAt = `${o.host}/${o.id}/${o.path}#${holder.era}`;
     owed.has(chainAt) ? owed.get(chainAt).push(o) : owed.set(chainAt, [o]);
   }
 
   for (const [chainAt, owedOrders] of owed) {
-    const start = owedOrders[0].created, key = `${owedOrders[0].host}/${owedOrders[0].id}`;
-    // Each payment at the version in force at its own height; a renewal
-    // where none is, or where it is a close, buys nothing.
-    const payments = [...owedOrders, ...renewals.filter((r) => `${r.host}/${r.id}/${r.path}` === chainAt && r.created >= start)]
-      .map((p) => ({ ...p, terms: termsAt(key, p.created) }))
-      .filter((p) => p.terms && !isClosed(p.terms))
-      .sort(byHeight);
-    const paidUntil = payments.reduce((end, p) => (end > p.created ? end : p.created) + (p.paid / pathPrice(p.terms, p.path)) * p.terms.period, 0n);
-    const until = paidUntil < ends(key) ? paidUntil : ends(key);
+    // Each payment at the version in force at its own height; a renewal where none is, or where it is a
+    // close, buys nothing, and neither does one keyed after another order took the path.
+    const end = eraEnds.get(`${owedOrders[0].path}#${chainAt.split("#").pop()}`);
+    const until = paidUntil(owedOrders, renewalsOf(owedOrders[0]), end ?? NO_END);
     for (const o of owedOrders) verdicts.set(o.key, { kind: "owed", from: o.created + SETTLE, until, active: height < until, order: o.order, payload: o.payload });
   }
   return verdicts;

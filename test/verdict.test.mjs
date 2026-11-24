@@ -145,7 +145,9 @@ test("paid time: orders and renewals add whole periods, oldest first", () => {
   assert.equal(until([]).from, 200n + SETTLE);
   assert.equal(until([]).active, true);
   assert.equal(until([renewal({ created: 300n, paid: 100n })]).until, 1640n + 2880n, "two more periods from where paid time ends");
-  assert.equal(until([renewal({ created: 5000n })]).until, 6440n, "lapsed: from the renewal's own height");
+  const late = [renewal({ created: 5000n })];
+  assert.equal(judge({ sdk, height: 5000n + SETTLE, versions: offers(), orders: [o], renewals: late }).get(o.key).until, 6440n, "lapsed: from the renewal's own height, once settled");
+  assert.equal(judge({ sdk, height: 5000n + SETTLE - 1n, versions: offers(), orders: [o], renewals: late }).get(o.key).until, 1640n, "a renewal of a lapsed chain counts only once settled");
   assert.equal(until([renewal({ created: 300n, paid: 99n })]).until, 1640n + 1440n, "a part period counts as none");
   assert.equal(until([renewal({ created: 199n })]).until, 1640n, "a renewal before the order does not count");
   assert.equal(until([renewal({ created: 300n, path: "Nexus/testnet/y" })]).until, 1640n, "another chain's renewal");
@@ -327,4 +329,47 @@ test("an order taken by an earlier one takes none of its offer's chains", () => 
   assert.deepEqual(verdicts([x, rival, again], { versions: offers(ONE) }), ["owed", "taken", "owed"]);
   const ONE2 = { ...OFFER, capacity: 2n }, other = order({ buyer: C, path: "Nexus/testnet/y", created: 203n });
   assert.deepEqual(verdicts([x, rival, other], { versions: offers(ONE2) }), ["owed", "taken", "owed"], "the rival did not fill the second chain");
+});
+
+test("a name is held while its chain has paid time; once that runs out the next order takes it", () => {
+  const HOST2 = key(5);
+  const text = offerText(OFFER.created, formatOffer(OFFER));
+  const versions = new Map([[`${HOST}/o`, [text]], [`${HOST2}/o`, [text]]]);
+  const at = (host, o) => ({ ...o, host, key: orderKey({ host, id: o.id, payer: o.buyer, height: o.created, paid: o.paid, path: o.path }) });
+  const NEW = payload({ ...SPEC, initialReward: 11n });
+  const first = order({ created: 200n });  // paid to 1640
+  const early = at(HOST2, order({ buyer: B, created: 1639n, payloadText: NEW }));
+  const after = at(HOST2, order({ buyer: B, created: 1640n, payloadText: NEW }));
+  const j = (orders, rs = [], h = 5000n) => judge({ sdk, height: h, versions, orders, renewals: rs });
+  assert.equal(j([first, early]).get(early.key).kind, "taken", "while the first chain has paid time");
+  let v = j([first, after]);
+  assert.deepEqual([v.get(first.key).kind, v.get(after.key).kind], ["owed", "owed"], "its time ran out at 1640: the name passes");
+  assert.equal(v.get(after.key).until, 1640n + 1440n);
+  assert.equal(v.get(after.key).elsewhere, undefined);
+
+  // A renewal keyed before the next order keeps the name; one keyed at or after it buys nothing.
+  const kept = [renewal({ payer: A, created: 1000n })];
+  assert.equal(j([first, after], kept).get(after.key).kind, "taken", "renewed in time");
+  const lateRenewal = [renewal({ payer: A, created: 1700n })];
+  v = j([first, after], lateRenewal);
+  assert.deepEqual([v.get(first.key).until, v.get(after.key).kind], [1640n, "owed"], "the old chain's renewal after the handover buys nothing");
+
+  // The old payload ordered again while the new holder has time is taken; after it lapses, it may win back.
+  const back = order({ buyer: C, created: 2000n }), backLater = order({ buyer: C, created: 3080n });
+  assert.equal(j([first, after, back]).get(back.key).kind, "taken");
+  v = j([first, after, backLater]);
+  assert.equal(v.get(backLater.key).kind, "owed", "the old genesis again, once the new one's time ran out");
+  assert.equal(v.get(first.key).until, 1640n, "the old era keeps its own paid time");
+  assert.equal(v.get(backLater.key).until, 3080n + 1440n, "a new era's paid time starts fresh");
+});
+
+test("a lapsed chain's renewal that would keep its name is fixed before the next order is judged", () => {
+  const first = order({ created: 200n });  // paid to 1640
+  const next = order({ buyer: B, path: "Nexus/testnet/x", created: 1705n, payloadText: payload({ ...SPEC, initialReward: 11n }) });
+  const renew = [renewal({ payer: A, created: 1700n })];  // after the lapse, before the next order
+  for (const h of [1716n, 1720n, 1721n, 3000n]) {
+    const v = judge({ sdk, height: h, versions: offers(), orders: [first, next], renewals: renew });
+    assert.equal(v.get(first.key).until, h >= 1716n ? 1700n + 1440n : 1640n);
+    if (h >= 1721n) assert.equal(v.get(next.key).kind, "taken", `at ${h}: the renewal kept the name`);
+  }
 });
