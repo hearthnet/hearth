@@ -392,3 +392,26 @@ test("a seller judges its orders against every host's: an earlier order at anoth
   assert.equal(j.owed.size, 0, "nothing to launch");
   assert.deepEqual(j.counts, { taken: 1 }, "its own orders only");
 });
+
+test("a seller counts a name holder's renewal at another host", async () => {
+  const { judgeOwn } = await import("../host/status.mjs");
+  const sdk = await import("../vendor/lattice-sdk.js");
+  const { formatOffer, formatPayload, offerText, orderKey } = await import("../client/records.mjs");
+  const addr = (n) => sdk.accountFromPrivateKey(new Uint8Array(32).fill(n)).address;
+  const ME = addr(21), OTHER = addr(22), A = addr(23), B = addr(24);
+  const OFFER = { created: 100n, parent: "Nexus/testnet", price: 50n, period: 100n, until: 100000n, capacity: 5n,
+    maxBlockSize: 100000n, maxStateGrowth: 100000n, minTargetBlockTime: 1000n, maxNumberOfTransactionsPerBlock: 100n, modules: "any" };
+  const SPEC = { maxNumberOfTransactionsPerBlock: 10n, maxStateGrowth: 1000n, maxBlockSize: 1000n, premine: 0n, targetBlockTime: 5000n, initialReward: 10n, halvingInterval: 1000n, halfLife: 100n, wasmPolicies: [] };
+  const pay = (spec) => formatPayload({ spec, premineTo: null, modules: {}, genesisTransactions: [] });
+  const path = "Nexus/testnet/x";
+  const order = (host, buyer, created, payloadText) => ({ key: orderKey({ host, id: "o", payer: buyer, height: created, paid: 50n, path }), host, id: "o", buyer, payer: buyer, created, paid: 50n, path, payloadText });
+  const text = offerText(OFFER.created, formatOffer(OFFER));
+  const held = order(OTHER, A, 200n, pay(SPEC));  // to 300
+  const renewal = { key: orderKey({ host: OTHER, id: "o", payer: A, height: 250n, paid: 50n, path }), host: OTHER, id: "o", payer: A, created: 250n, paid: 50n, path };  // to 400
+  const mine = order(ME, B, 320n, pay({ ...SPEC, initialReward: 11n }));
+  const m = { height: 1000n, versions: new Map([[`${ME}/o`, [text]], [`${OTHER}/o`, [text]]]), orders: [held, mine], renewals: [renewal] };
+  const j = await judgeOwn({ sdk, n: { genesis: async () => undefined }, m, self: ME, hosted: new Set() });
+  assert.equal(j.verdicts.get(mine.key).kind, "taken", "the holder renewed elsewhere: still held at 320");
+  assert.equal(j.owed.size, 0);
+  assert.deepEqual(j.renewals, [], "its own renewals only, for its earnings");
+});

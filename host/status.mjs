@@ -24,7 +24,8 @@ export async function judgeOwn({ sdk, n, m, self, hosted }) {
     if (facts) genesis.set(path, facts);
   }
   // Every host's orders: the first order for a path, at any host, decides it (verdict.mjs).
-  const verdicts = judge({ sdk, height: m.height, versions: m.versions, orders: m.orders.filter((o) => hosting(m, o)), renewals, genesis });
+  // Every host's renewals too: a name's holder may have renewed at another host.
+  const verdicts = judge({ sdk, height: m.height, versions: m.versions, orders: m.orders.filter((o) => hosting(m, o)), renewals: m.renewals.filter((r) => hosting(m, r)), genesis });
   const owed = new Map(), until = new Map();
   for (const o of mine) {
     const v = verdicts.get(o.key);

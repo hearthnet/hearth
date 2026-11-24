@@ -49,7 +49,7 @@ export function judge({ sdk, height, versions, orders, renewals = [], genesis = 
   if (!(versions instanceof Map)) throw new TypeError("judge needs `versions`, every version of every offer (market().versions): one text per offer cannot show which version was in force");
   const terms = new Map([...versions].map(([key, texts]) => [key, texts.map(parseOffer).filter(Boolean)]));
   const termsAt = (key, h) => { const t = inForce(versions.get(key), h); return t === undefined ? undefined : parseOffer(t); };
-  const ends = (key) => (terms.get(key) ?? []).reduce((end, v) => (v.until > end ? v.until : end), 0n);
+  const ends = (key, before = NO_END) => (terms.get(key) ?? []).reduce((end, v) => (v.created < before && v.until > end ? v.until : end), 0n);
   const verdicts = new Map();
   const settled = [];
   for (const o of orders) {
@@ -79,7 +79,10 @@ export function judge({ sdk, height, versions, orders, renewals = [], genesis = 
       if (lapsed && p.renewal && height < p.created + SETTLE) continue;
       end = (lapsed ? p.created : end) + (p.paid / pathPrice(p.terms, p.path)) * p.terms.period;
     }
-    return end < ends(key) ? end : ends(key);
+    // An era that ended, or a holder judged at `before`, by the versions written before then: a version
+    // written later never changes who held the path.
+    const cap = ends(key, before);
+    return end < cap ? end : cap;
   };
   const renewalsOf = (o) => renewals.filter((r) => r.host === o.host && r.id === o.id && r.path === o.path).map((r) => ({ ...r, renewal: true }));
   // A path's holder still has paid time at `c`: any of its chains, from what was paid before `c`.
@@ -100,7 +103,7 @@ export function judge({ sdk, height, versions, orders, renewals = [], genesis = 
     // takes it. Read from the orders alone: a genesis a reader knows never changes who holds it.
     const h = holders.get(o.path);
     if (h && h.first.payloadText !== o.payloadText && holds(h, o.created)) {
-      const elsewhere = h.first.host !== o.host;
+      const elsewhere = !h.accepted.some((a) => a.host === o.host);
       verdicts.set(o.key, { kind: "taken", elsewhere, reason: `an earlier order for the path${elsewhere ? ", at another host," : " at this host"} named another payload, and has paid time`, order: o.order });
       continue;
     }

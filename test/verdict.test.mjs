@@ -373,3 +373,19 @@ test("a lapsed chain's renewal that would keep its name is fixed before the next
     if (h >= 1721n) assert.equal(v.get(next.key).kind, "taken", `at ${h}: the renewal kept the name`);
   }
 });
+
+test("an offer version written after a rival's order never takes the path back", () => {
+  const HOST2 = key(5);
+  const short = offerText(OFFER.created, formatOffer({ ...OFFER, until: 250n }));
+  const longer = offerText(390n, formatOffer({ ...OFFER, created: 390n, until: 5000n }));
+  const text = offerText(OFFER.created, formatOffer(OFFER));
+  const at = (host, o) => ({ ...o, host, key: orderKey({ host, id: o.id, payer: o.buyer, height: o.created, paid: o.paid, path: o.path }) });
+  const held = at(HOST2, order({ created: 200n, paid: 500n }));  // its offer ends at 250
+  const rival = order({ buyer: B, created: 320n, payloadText: payload({ ...SPEC, initialReward: 11n }) });
+  const before = judge({ sdk, height: 1000n, versions: new Map([[`${HOST}/o`, [text]], [`${HOST2}/o`, [short]]]), orders: [held, rival] });
+  const after = judge({ sdk, height: 1000n, versions: new Map([[`${HOST}/o`, [text]], [`${HOST2}/o`, [short, longer]]]), orders: [held, rival] });
+  for (const v of [before, after]) {
+    assert.equal(v.get(rival.key).kind, "owed");
+    assert.equal(v.get(held.key).until, 250n, "the old era by the versions written before it ended");
+  }
+});

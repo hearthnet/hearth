@@ -113,7 +113,7 @@ export async function stop({ sdk, node, fetchImpl, rpc, privateKey, market, fee,
     }
   }
   const orders = m.orders.filter((o) => o.host === self);
-  const verdicts = judge({ sdk, height: m.height, versions: m.versions, orders: m.orders, renewals: m.renewals.filter((x) => x.host === self) });
+  const verdicts = judge({ sdk, height: m.height, versions: m.versions, orders: m.orders, renewals: m.renewals });
   const { paid, settling } = paidTime({ orders, verdicts });
 
   // The fragment keeps only chains with paid time (their parents are hosted

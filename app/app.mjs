@@ -575,8 +575,8 @@ function statsByHost() {
   for (const o of market.orders) {
     const v = verdicts.get(o.key);
     const s = stats.get(o.host) ?? { owed: 0, active: 0, full: 0, taken: 0, void: 0, pending: 0, unserved: 0n, paid: 0n };
-    // Lost to an earlier order at another host: the buyer's to check, not the host's fault.
-    const kind = v.kind === "taken" && v.elsewhere ? "void" : v.kind;
+    // Lost to an earlier order at another host: not the host's fault, and not a void order either.
+    const kind = v.kind === "taken" && v.elsewhere ? "lost" : v.kind;
     s[kind] = (s[kind] ?? 0) + 1;
     if (v.kind === "owed" && v.active) s.active++;
     s.paid += o.paid;
