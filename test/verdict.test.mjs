@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as sdk from "../vendor/lattice-sdk.js";
-import { CREATED_WINDOW, formatOffer, formatPayload, inForce, isClosed, moduleCID, newestOffers, offerAt, offerText, orderKey, parseOffer, parsePayload, strictJSON, SETTLE } from "../client/records.mjs";
+import { CREATED_WINDOW, formatOffer, formatPayload, inForce, isClosed, moduleCID, newestOffers, offerAt, offerText, orderKey, parseOffer, parsePayload, sponsorAt, strictJSON, SETTLE } from "../client/records.mjs";
 import { judge, sameGenesis } from "../client/verdict.mjs";
 
 const key = (n) => sdk.accountFromPrivateKey(new Uint8Array(32).fill(n)).address;
@@ -255,4 +255,40 @@ test("an offer ends at the latest `until` any version names", () => {
   const o = order({ created: 200n, paid: 500n });  // ten periods
   const short = [version({ until: 1000n }), version({ created: 300n, until: 5000n }), version({ created: 400n, until: 400n })];
   assert.equal(judged([o], { versions: short }).get(o.key).until, 5000n, "extended at 300, closed at 400: still 5000");
+});
+
+test("whole path: an order pays the price for each chain on its path, Nexus included", async () => {
+  const { orderWrite, renewWrite } = await import("../client/tx.mjs");
+  const { pathPrice } = await import("../client/records.mjs");
+  const WHOLE = { ...OFFER, wholePath: true };   // under Nexus/testnet: Nexus, Nexus/testnet, the chain = 3 × 50
+  const text = offerText(WHOLE.created, formatOffer(WHOLE));
+  assert.ok(text.endsWith("\nwhole path"));
+  assert.equal(parseOffer(text).wholePath, true);
+  assert.equal(parseOffer(offerText(OFFER.created, formatOffer(OFFER))).wholePath, undefined, "an offer from before 2.1 is priced per order");
+  assert.equal(pathPrice(WHOLE, "Nexus/testnet/x"), 150n);
+  assert.equal(pathPrice(OFFER, "Nexus/testnet/x"), 50n);
+
+  const at = (orders, renewals = []) => judge({ sdk, height: 1000n, versions: offers(WHOLE), orders, renewals });
+  const short = order({ paid: 50n });
+  assert.equal(at([short]).get(short.key).kind, "void", "one chain's price is less than one period of the path");
+  const one = order({ paid: 150n }), two = order({ buyer: B, paid: 300n, path: "Nexus/testnet/y" });
+  const v = at([one, two], [renewal({ created: 300n, paid: 150n })]);
+  assert.equal(v.get(one.key).until, 200n + 1440n + 1440n, "one period, and one renewed");
+  assert.equal(v.get(two.key).until, 200n + 2880n, "two periods");
+
+  const w = orderWrite({ host: HOST, id: "o", offer: WHOLE, buyer: A, path: "Nexus/testnet/x", payload: { spec: SPEC, premineTo: null, modules: {}, genesisTransactions: [] }, periods: 2n, height: 500n });
+  assert.equal(w.payments[0].amount, 300n);
+  assert.equal(renewWrite({ host: HOST, id: "o", offer: WHOLE, payer: A, path: "Nexus/testnet/x", periods: 1n, height: 500n }).payments[0].amount, 150n);
+});
+
+test("an offer's sponsor by its path is on the host's url record's origin, as the record is now", () => {
+  const text = (sponsor) => version({ sponsor });
+  assert.equal(parseOffer(text("/sponsor")).sponsor, "/sponsor");
+  assert.equal(parseOffer(text("https://host.example/sponsor")).sponsor, "https://host.example/sponsor");
+  for (const bad of ["//evil.example/sponsor", "/\\evil.example/sponsor", "sponsor", "/sponsor?x=1", "/spon sor", "http://host.example/sponsor"]) assert.equal(parseOffer(text(bad)), undefined, bad);
+  assert.equal(sponsorAt("/sponsor", "https://a-b.trycloudflare.com"), "https://a-b.trycloudflare.com/sponsor");
+  assert.equal(sponsorAt("/sponsor", "https://host.example/read/\nproof https://host.example/.well-known/lattice.json"), "https://host.example/sponsor", "the origin, not the read path");
+  assert.equal(sponsorAt("/sponsor", undefined), undefined, "no url record: no sponsor");
+  assert.equal(sponsorAt("https://other.example/s", "https://host.example"), "https://other.example/s");
+  assert.equal(sponsorAt(undefined, "https://host.example"), undefined);
 });

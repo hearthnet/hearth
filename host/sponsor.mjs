@@ -6,26 +6,26 @@ import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { onPath } from "./hearth.mjs";
 
-const GET_IT = "see https://lattice.build/docs/ for where to get it, put it on PATH, or give --sponsor-bin <path>";
+const GET_IT = "give --sponsor-bin <path> to one, or leave --sponsor-bin out and Hearth runs its own";
 
 /** `--sponsor-bin` as a path to run: a path as given, else the name on PATH; an error saying where to get it when there is none. */
 export function sponsorBinary(bin = "lattice-sponsor", PATH = process.env.PATH) {
   const found = bin.includes("/") ? (existsSync(bin) && statSync(bin).isFile() && (statSync(bin).mode & 0o111) ? bin : undefined) : onPath(bin, PATH);
-  if (!found) throw new Error(`no lattice-sponsor at ${bin}${bin.includes("/") ? "" : " on PATH"}: Hearth runs one beside the node to sponsor writes and storage; ${GET_IT}`);
+  if (!found) throw new Error(`no sponsor at ${bin}${bin.includes("/") ? "" : " on PATH"}: Hearth runs one beside the node to sponsor writes and storage; ${GET_IT}`);
   return found;
 }
 
 /**
  * lattice-sponsor's arguments: the node's loopback API and cookie, its key,
  * where it listens (every interface only when the seller advertises a public
- * URL), and storage for work at `storageRate` bytes per market coin, paid in
+ * URL and no proxy beside it serves that URL: `loopback`), and storage for work at `storageRate` bytes per market coin, paid in
  * coin to the seller (`payTo`, as storage offers say). Its `GET /terms`
  * names its own address (`address`), the one the offer's blocks pay, which
  * is how a buyer sees the sponsor is this host's. It pins at most
  * `storageBudget` bytes in all.
  */
-export function sponsorArgs({ node, cookieFile, key, port, publicURL, market, storageRate, storageFile, storageBudget, payTo }) {
-  return ["--node", node, "--cookie-file", cookieFile, "--key", key, "--port", String(port), "--host", publicURL ? "0.0.0.0" : "127.0.0.1",
+export function sponsorArgs({ node, cookieFile, key, port, publicURL, market, storageRate, storageFile, storageBudget, payTo, loopback = false }) {
+  return ["--node", node, "--cookie-file", cookieFile, "--key", key, "--port", String(port), "--host", publicURL && !loopback ? "0.0.0.0" : "127.0.0.1",
     "--sell-storage", "--storage-rate", `${market}=${storageRate}`, "--storage-file", storageFile, "--storage-budget", String(storageBudget), "--pay-to", payTo];
 }
 
@@ -58,7 +58,7 @@ export async function unpin({ port, cid, cookie, fetchImpl = (...a) => fetch(...
     response = await fetchImpl(`http://127.0.0.1:${port}/takedown`, { method: "POST", signal: AbortSignal.timeout(30_000),
       headers: { "Content-Type": "application/json", Authorization: `Basic ${Buffer.from(cookie).toString("base64")}` }, body: JSON.stringify({ cid }) });
   } catch {
-    throw new Error(`no lattice-sponsor answers on 127.0.0.1:${port}: unpin while the seller (and its sponsor) runs, or give --sponsor-port`);
+    throw new Error(`no sponsor answers on 127.0.0.1:${port}: unpin while the seller (and its sponsor) runs, or give --sponsor-port`);
   }
   const text = await response.text();
   if (response.ok) return JSON.parse(text);
@@ -67,7 +67,7 @@ export async function unpin({ port, cid, cookie, fetchImpl = (...a) => fetch(...
   }
   if (response.status === 401) throw new Error(`the sponsor on port ${port} refused the node's cookie: is it the sponsor of this node (--root)?`);
   if (response.status === 404 || response.status === 405) {
-    throw new Error(`the lattice-sponsor on port ${port} has no POST /takedown (HTTP ${response.status}): update lattice-sponsor; it serves it with --sell-storage, as hearth sell runs it`);
+    throw new Error(`the sponsor on port ${port} has no POST /takedown (HTTP ${response.status}): update it; it serves it with --sell-storage, as hearth sell runs it`);
   }
   throw new Error(`POST /takedown: HTTP ${response.status} ${text.slice(0, 300)}`);
 }

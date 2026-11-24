@@ -2,7 +2,7 @@
 
 A home for your chain.
 
-Launch a Lattice chain without running a node. You buy coin, pay a host by
+Launch a chain without running a node. You buy coin, pay a host by
 the period, and the host runs your chain: it builds the genesis from your
 spec, stores it and serves it at a public URL. Anyone can check which hosts
 serve what they sold.
@@ -11,7 +11,7 @@ Hosts also make their chains' blocks. Every host paces the market and each
 chain it sells: one block per target block time, about one hash each, paid to
 its sponsor's key. Anyone else may mine a chain too, for its block reward.
 
-There is no server. The market is a Lattice chain with a policy; the page
+There is no server. The market is a chain with a policy; the page
 reads it from any node that hosts it, checks every record against its CID,
 and probes each host from your browser.
 
@@ -21,26 +21,34 @@ Why host: to earn Hearth coin (the market's coin), which pays for hosting
 and storage from any seller. Buyers' orders pay the seller's key; the
 blocks it makes pay its sponsor's key, 1,000 coin a market block.
 
-You need a running Lattice node, **5.0.0 or newer** (`lattice up`),
-lattice-sponsor on your `PATH` (see <https://lattice.build/docs/> for where
-to get it, or give `--sponsor-bin`), and Node.js 22 or later. In the node's root (or with `--root`):
+You need Node.js 22 or later, on macOS (Apple silicon) or Linux (x86-64):
 
 ```
-npx @hearthnet/hearth sell                  # 10000 Hearth coin a day per chain; --price to choose
+npx @hearthnet/hearth sell                  # 10000 Hearth coin a day per chain on the path; --price to choose
 ```
+
+Hearth runs the node it sells from. The first time, it downloads a pinned
+node and sponsor into `~/.hearth/bin` (each checked against the SHA-256 in
+`host/runtime.mjs`), makes the node in `~/.hearth/node`, and runs it
+while `hearth sell` sells (its log is `~/.hearth/node/node.log`); stop the
+seller and the node stops with it. Other `hearth` verbs use that node while
+it runs, or start it for as long as they take. It listens on port 4001 for peers and serves
+its operator API on 127.0.0.1:8080. To use a node you run yourself instead,
+give `--root` (its root) or `--node` with `--token-file`.
 
 **The first sync of Nexus and the market takes a few minutes.** Until the
 node has synced the market, the seller prints `syncing market: h / H` (its
 tip against the best header its peers showed) and reads, funds, writes and
 burns nothing.
 
-It finds the node: `--root`, else the current directory (as `lattice`
-does), else `~/.lattice` (where a bare `lattice-node` keeps its storage),
-whichever holds a running node's `chains/Nexus/.cookie`. It checks that the
-node has what it needs (`GET /config` saying which layer lists each chain,
-`status.chains[].from`, which Lattice 4.0.1 brought) and stops with "Hearth
-needs Lattice 5.0.0 or newer (you have X: ...)" beside an older one, X as
-`GET /status` reports it. It makes the seller's key at
+It finds the node: `--root`, else the current directory, else `~/.lattice`,
+whichever holds a running node's `chains/Nexus/.cookie`; with none, Hearth's
+own (above). A node of your own there that is not running stops it ("the node
+at <dir> is not running"); only `hearth sell` makes Hearth's node, and the
+other verbs, on a machine that sold nothing, say so. Beside a node
+of your own it checks that the node has what it needs (`GET /config` saying
+which layer lists each chain) and stops with "Hearth needs node 5.0.0 or
+newer (you have X: ...)" beside an older one, X as `GET /status` reports it. It makes the seller's key at
 `<root>/hearth/seller.json` (mode 0600; it prints the address, never the
 key, and refuses a key file others can read) unless there is one, has the
 node host the market (`Nexus/hearth`) and the offer's parent
@@ -49,15 +57,25 @@ testnet with `--market Nexus/testnet/lodger-3129cc --parent Nexus/testnet`: run
 without them, it would rewrite the node's list of hosted chains for the new market), writes the offer (10,000 market coin
 per day unless `--price` says, converted to market blocks at the market's block time; `--chains 10`
 and small chains' limits unless given: see *Default limits*), then sells in
-the foreground. A bad flag, or a `--root` where no Lattice node lives ("no
-Lattice node at <root>"), stops it before it writes anything. Every verb
+the foreground. A bad flag, or a `--root` where no node lives ("no
+node at <root>"), stops it before it writes anything. Every verb
 takes `--help`. `--price` takes `<coin>/<blocks>` or `/hour`, `/day`, `/week`;
 `--offer offer.json` still works instead.
 
-**Default price.** 10,000 coin per chain per day. The market pays 1,000
+**The price is per chain on the path.** A host runs every chain from Nexus
+down to the one it sells, so a buyer pays the price for each of them, Nexus
+included: a chain under Nexus (`Nexus/app`) costs twice the price a period,
+one under Nexus/testnet (`Nexus/testnet/app`) three times. Offers written
+before 2.1 charge the price once per chain; a 2.1 seller writes a new
+version of its offer priced per chain on the path. Hearth 2.0 cannot read
+that line: it sees no offer while such a version is in force, so it misses
+renewals paid under it and calls orders placed under it void. Read the
+market with 2.1 or later.
+
+**Default price.** 10,000 coin per chain on the path per day. The market pays 1,000
 coin a block, a block a minute: 1,440,000 a day, shared by the sellers
 pacing it. With 10 sellers each mints about 144,000 a day, and a full
-default offer (10 chains) earns 100,000 a day, so orders count beside the
+default offer (10 chains under Nexus, 20,000 each) earns 200,000 a day, so orders count beside the
 blocks. `--price` sets another.
 
 **Default limits.** `--price` alone sells chains with blocks at least 30 s
@@ -74,11 +92,11 @@ other limits.
 offer, url and storage offer: three fees). The pacer pays the sponsor's key
 the market's blocks, so beside the node the seller moves the fees of its
 first writes (four, for a close too) from the sponsor's key to its own
-before it starts lattice-sponsor, so nothing else signs with that key. It
+before it starts the sponsor, so nothing else signs with that key. It
 waits until that key holds five fees (the four it moves and the move's own
 fee); until then it says it waits for block rewards, or that you may send
 the coin or earn it with `hearth earn` (below), and checks again each
-`--interval`. It moves nothing if any lattice-sponsor already answers on
+`--interval`. It moves nothing if any sponsor already answers on
 `--sponsor-port` (it could sign with the same key), and says so. With
 `--node`, or once an offer is out, it only says what to send, earn or
 sweep.
@@ -116,15 +134,15 @@ chain the pacer makes blocks of (each level of the template pays it), and
 fund the fees its clients pay with work. `hearth sweep [--float 100]
 [--chain <path>]` moves what it holds on one chain (the market by default)
 to the seller's address, leaving the float, the fees it holds for
-transactions it signed and any fund deposits (lattice-sponsor's
+transactions it signed and any fund deposits (the sponsor's
 `lattice-sponsor-holds.json` and `lattice-sponsor-funds.json`). It signs
 with the sponsor's key, so it refuses while the seller or any
-lattice-sponsor on `--sponsor-port` runs, and while a transaction the
+a sponsor on `--sponsor-port` runs, and while a transaction the
 sponsor signed there has yet to land; it says how to pause the seller (its
 service, or the process) without `hearth stop`, which would close the
 offers.
 
-**Sponsor.** Beside the node the seller runs lattice-sponsor, and starts it
+**Sponsor.** Beside the node the seller runs the sponsor, and starts it
 again, with backoff, whenever it exits. Its key is
 `<root>/hearth/sponsor.json` (mode 0600), never the seller's: a co-signature
 lends the key's authority to a draft, so it must own nothing but its float,
@@ -136,13 +154,13 @@ tenth of a market block's reward), up to `--storage-budget` bytes pinned at once
 (default 8650). Pins are served from the node's IP. `hearth unpin <cid>`
 takes a file down: the sponsor's `POST /takedown`, with the node's cookie,
 unpins it, frees its bytes and refuses the CID from then on; its buyer loses
-the rest of its time, with no refund (it needs a lattice-sponsor with the
+the rest of its time, with no refund (it needs a sponsor with the
 takedown route).
 Without `--sponsor-url` it listens on loopback only and the offer names no
 sponsor, which the app shows buyers. With
 `--sponsor-url https://host.example/sponsor` it listens on every interface
 (put TLS in front of the port) and the offer names that URL. With `--node`
-(a remote node) it runs no sponsor: lattice-sponsor reaches a node only on
+(a remote node) it runs no sponsor: a sponsor reaches a node only on
 its loopback, so run it there.
 
 **Offers sell for 30 days.** An offer's `until` is 30 days of market blocks
@@ -164,7 +182,9 @@ flags write a new offer beside the old one (the seller says the old one
 stays on sale). It keeps hosting the parents of all its offers still on
 sale, so chains owed on an old one stay hosted.
 
-**Key only or verified.** Without `--url` the host writes no url record:
+**Key only or verified.** With `--key-only` (or a node of your own and
+neither `--url` nor `--public`) the host writes no url record, and removes
+one it wrote before:
 it claims no domain, so the app lists its offers under its key, marked
 *Key only*, for buyers to judge by its record. With
 `--url https://host.example` (and `--proof`, see *Verified hosts*) and
@@ -172,14 +192,34 @@ it claims no domain, so the app lists its offers under its key, marked
 offers carry the domain's name and *Verified*. A url whose domain does not
 list the address is hidden: anyone could name someone else's URL.
 
+**Reachable by default.** A host buyers can't reach takes orders it can't
+serve: a buyer's page has no URL to read or write its chains at. So when
+Hearth runs the node and the seller gives no `--url`, `hearth sell` makes the
+machine reachable itself: it sets the node's public read port (`publicRead`
+8082, taking writes), runs a local proxy that serves that port, the sponsor
+under `/sponsor` and the `/.well-known/lattice.json` that lists the seller,
+and opens a Cloudflare quick tunnel to it (cloudflared, pinned and checked
+like the node; no account). The seller sells with the tunnel's
+`https://….trycloudflare.com` URL as `--url` and `<url>/sponsor` as
+`--sponsor-url`, so its offers show as *Verified*. The URL changes each time
+it starts and the seller writes the new one in its url record, which counts
+at once: the offer names its sponsor by its path (`sponsor /sponsor`), on
+whatever origin the url record has, so it needs no new version. Pages that
+pasted the old URL must copy the new one. Quick
+tunnels are Cloudflare's free tier without uptime promises: right for
+testnets and trying Hearth. A host with a domain gives `--url`; `--key-only`
+sells with no URL at all. With a node of your own (`--root`, or one found
+beside), the tunnel is `--public`, and the node must already have
+`publicRead` and `publicSubmit` set; Hearth says how.
+
 **Keep it running.** `--install` writes units for both the node
-(`lattice up --root <root>`) and the seller, the seller after the node:
+(Hearth's own, or the one at `--root`) and the seller, the seller after the node:
 systemd user units on Linux (`~/.config/systemd/user/hearth-node.service`,
 and `hearth.service` with `After=` and `Requires=` on it), or two launchd
 agents on macOS (`~/Library/LaunchAgents/net.hearth.node.plist` and
 `net.hearth.seller.plist`; launchd has no ordering, so the seller waits for
 the node itself). The node is started again after a failure exit, which
-`lattice restart` is, but stays down after `lattice down` and after exit 78
+a restart is, but stays down after a clean stop and after exit 78
 (an invalid configuration; launchd cannot exempt one exit status, so the
 node's agent runs it under `/bin/sh`, which exits 0 for 78). The seller is
 started again after a failure, not after it exits 0 (when `hearth stop` has
@@ -219,7 +259,7 @@ npx @hearthnet/hearth earn [--until <coins>] [--workers 1] --sponsor <url>
 ```
 
 earns market coin for the seller's address with this machine's processor,
-through a fee sponsor's payouts (lattice-sponsor's *Payouts*): `POST /work`
+through a fee sponsor's payouts (the sponsor's *Payouts*): `POST /work`
 naming the address as `payTo`, each share back through `POST /shares`, and
 the sponsor pays the address in coin once its earnings reach its payout
 (`GET /earnings`). It stops once the address holds `--until` coins on the
@@ -238,8 +278,8 @@ check a host itself (`client/service.mjs`):
 
 - **listed**: the offer is open, and its sponsor (an https URL) answers
   `GET /terms` bound to this host: the terms' `address` (the sponsor's own
-  key; `fundTo` from an older lattice-sponsor) is the offer's `blocks`
-  address, and their `payTo` is the host (lattice-sponsor runs with
+  key; `fundTo` from an older sponsor) is the offer's `blocks`
+  address, and their `payTo` is the host (the sponsor runs with
   `--pay-to <seller>`). This checks that the host is up and consistent, not
   that it hosts anything: a host answers for its own address;
 - **serving** a chain: the offer's `blocks` address is credited on the
@@ -295,7 +335,7 @@ land only once.
 
 Hosting earns the market's coin (Hearth coin): orders pay the seller's key,
 and blocks pay its sponsor's key (`hearth sweep` moves that to the seller's).
-Spend it on hosting or storage, or sell it on Lattice's own exchange, where
+Spend it on hosting or storage, or sell it on the chains' own exchange, where
 buyers find it on the app's Buy coin page.
 
 ```
@@ -303,27 +343,27 @@ npx @hearthnet/hearth sell-coin 300000 --price 3000 [--float 100]
 ```
 
 `hearth sell-coin <coin> --price <parent coin>` locks `<coin>` of the seller
-key's market coin as a Lattice deposit demanding `<parent coin>` on the
+key's market coin as a deposit demanding `<parent coin>` on the
 market's parent (Nexus for the default market), for all of it. It
 checks every amount, and refuses to leave the key less than `--float` for its
 fees, before it signs. Like `hearth sweep`, it refuses while the seller or
-a lattice-sponsor on `--sponsor-port` runs. A retry that finds an open
+a sponsor on `--sponsor-port` runs. A retry that finds an open
 deposit of the same amount and price prints it and sends nothing (`--again`
 locks another). The deposit's nonce is the key's account nonce, so its
 identity is new and sending it again is the same transaction. A buyer's
 payment on the parent credits the seller's own address there directly:
 nothing to claim. `hearth status` lists, in bounded reads, the key's deposits (and who paid for
 each, until they take the coin), the market's cheapest coin on sale, and the
-key's parent-chain balance. Lattice has no cancel or refund: an unsold
+key's parent-chain balance. There is no cancel or refund: an unsold
 deposit comes back only the way any buyer takes it, the seller paying its
 price to its own address on the parent (a fee on each chain).
 
 ## How it works
 
 **Buying coin.** Hosts are paid in the market chain's own coin. Sellers lock
-coin on the market chain for a price in the parent chain's coin (a Lattice
+coin on the market chain for a price in the parent chain's coin (a
 *deposit*). A buyer pays that price on the parent (a *receipt*) and takes the
-coin on the market chain (a *withdrawal*). Lattice checks both sides, so
+coin on the market chain (a *withdrawal*). The chains check both sides, so
 nobody holds the payment in between, and there is no exchange to trust.
 Where a fee sponsor pays out the parent's coin, it can
 also be earned with the device's processor.
@@ -336,12 +376,13 @@ order's host is credited the amount its key names.
 
 | Key | Written by | Value (read off chain) |
 |---|---|---|
-| `offer/<host>/<id>/<height>` | the host, once per height: each is a version of the offer | price per period, the parent its chains go under, how many chains it sells, the spec limits it takes, the policy modules it runs, when it ends; then `blocks <address>` (where its blocks pay) and, if it runs a public sponsor, `sponsor <https url>` |
+| `offer/<host>/<id>/<height>` | the host, once per height: each is a version of the offer | price per period, the parent its chains go under, how many chains it sells, the spec limits it takes, the policy modules it runs, when it ends; then `blocks <address>` (where its blocks pay), if it runs a public sponsor `sponsor <https url>`, and `whole path` (the price is per chain on the path) |
 | `url/<host>` | the host | its public read URL |
 | `order/<host>/<id>/<payer>/<height>/<paid>/<path>` | anyone, once; pays the host `<paid>` in the same transaction | the chain's payload (spec, premine account, policy modules, genesis transactions), or `renew` to pay for more time |
 
 A chain's paid time is worked out from its orders and renewals: oldest
-first, each adds `floor(paid / price)` periods (at the price and period in
+first, each adds `floor(paid / (price × chains on the path))` periods
+(`floor(paid / price)` for an offer without `whole path`; at the price and period in
 force at the payment's own height) from where paid time ends, or from its
 own height if it had run out.
 
@@ -360,7 +401,7 @@ before it.
 CID. The market's facts are in `chain/market.json`: its path (`Nexus/hearth`),
 genesis and module CID.
 
-**Storage.** A host that runs a storage sponsor (lattice-sponsor
+**Storage.** A host that runs a storage sponsor (the sponsor
 `--sell-storage`, paid to the host's address with `--pay-to`, at a
 `--storage-rate` on the market chain) can also offer storage: an `offer/`
 record whose value is `kind storage`, the sponsor's URL, `bytesPerCoin`, the

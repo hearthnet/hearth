@@ -114,6 +114,8 @@ const { values: args } = parseArgs({
     "sponsor-url": { type: "string" }, "storage-rate": { type: "string", default: String(DEFAULT_STORAGE_RATE) },
     "storage-budget": { type: "string", default: String(DEFAULT_STORAGE_BUDGET) },
     resume: { type: "boolean", default: false },
+    // The sponsor stays on loopback though public (a proxy beside it serves --sponsor-url).
+    "sponsor-loopback": { type: "boolean", default: false },
   },
 });
 for (const name of ["market", "key"]) if (!args[name]) throw new Error(`--${name} is required`);
@@ -141,7 +143,7 @@ const { address: sponsorAddress, created: sponsorMade } = ensureKey(sdk, sponsor
 if (sponsorAddress === self) throw new Error(`${sponsorKey} is the seller's key: the sponsor's key must own nothing a draft could reach; move it away`);
 const sponsorDir = join(dirname(resolve(args.key)), "sponsor");
 log(`${sponsorMade ? "made the sponsor's key" : "sponsor key"} ${sponsorKey}: blocks pay ${sponsorAddress}`);
-if (!root) log("with --node this seller runs no sponsor (lattice-sponsor reaches a node only on its loopback): run one beside the node yourself");
+if (!root) log("with --node this seller runs no sponsor (a sponsor reaches a node only on its loopback): run one beside the node yourself");
 
 // ---- the node: its operator API, and nothing else of it ----
 
@@ -211,6 +213,10 @@ current = currentOffer({ self, id: offerId, file: offerFile });
 const storageFile = args["storage-offer"] ? JSON.parse(readFileSync(args["storage-offer"], "utf8")) : undefined;
 if (storageFile && (!storageFile.id || storageFile.id === offerId)) throw new Error("the storage offer needs an id of its own, not the hosting offer's");
 const urlValue = args.url && formatHostURL(args.url, args.proof);
+// A sponsor on the --url's own origin is offered by its path: it moves with
+// the url record (written at once), and a new URL (a quick tunnel's, each
+// start) needs no new offer version.
+const offerSponsor = sponsorURL && args.url && new URL(sponsorURL).origin === new URL(args.url).origin ? new URL(sponsorURL).pathname : sponsorURL;
 if (urlValue && !parseHostURL(urlValue)) throw new Error("--proof must be an https URL on --url's hostname");
 if (offerFile) log(`offer ${offerId}: ${growthLine({ ...offerFile, capacity: offerFile.capacity ?? 1 })}`);
 
@@ -231,7 +237,7 @@ async function send(actions) {
 let told;
 /** What a version sells, and until when: printed once before it is first written. */
 function tell(offer, height, targetBlockTime) {
-  const text = `selling ${offer.capacity} chains under ${offer.parent} at ${offer.price} market coin per ${offer.period} market blocks`
+  const text = `selling ${offer.capacity} chains under ${offer.parent} at ${offer.price} market coin per chain on the path per ${offer.period} market blocks`
     + `, ${sponsorURL ? `sponsoring writes and storage at ${sponsorURL}` : "with no public sponsor (no --sponsor-url)"}`
     + `, until market block ${offer.until} (about ${new Date(Date.now() + Number(offer.until - height) * Number(targetBlockTime)).toISOString().slice(0, 10)}): `
     + "an offer stays on sale until then; close it with `hearth stop`";
@@ -265,12 +271,14 @@ async function nextVersion(m, newest) {
     if (line !== saidOff) log((saidOff = line));
     return undefined;
   } else {
-    if (was.blocks === sponsorAddress && was.sponsor === sponsorURL) return undefined;
+    if (was.blocks === sponsorAddress && was.sponsor === offerSponsor && was.wholePath) return undefined;
     offer = { ...was, created: m.height };
     delete offer.mines;
+    if (!was.wholePath) log(`offer ${offerId} was priced per order; its new version prices per chain on the path: ${was.price} × ${was.parent.split("/").length + 1} chains for a chain under ${was.parent}, renewals included`);
   }
   offer.blocks = sponsorAddress;
-  if (sponsorURL) offer.sponsor = sponsorURL; else delete offer.sponsor;
+  offer.wholePath = true;   // an offer from before 2.1 gets a version priced per chain on the path
+  if (offerSponsor) offer.sponsor = offerSponsor; else delete offer.sponsor;
   if (!parseOffer(offerText(offer.created, formatOffer(offer)))) throw new Error("the offer file does not make a valid offer");
   tell(offer, m.height, spec.targetBlockTime);
   return offer;
@@ -288,6 +296,13 @@ async function ensureOffer(m, newest) {
     const { value } = storageOfferFrom(storageFile, m.height);
     log("writing storage offer", offerKey(self, storageFile.id, m.height), await send([{ key: offerKey(self, storageFile.id, m.height), newValue: value }]));
     return true;
+  }
+  if (!urlValue && m.urlValues.has(self)) {
+    // Sold with no URL: a url record from before (an old tunnel's, say) would hide the host's offers.
+    // Tried each pass, never in the way of hosting what is paid for.
+    try { log("removing the url record: selling with no URL", await send([{ key: urlKey(self), oldValue: m.urlValues.get(self) }])); }
+    catch (e) { log(`could not remove the url record yet: ${e.message}`); }
+    return false;
   }
   if (urlValue && m.urlValues.get(self) !== urlValue) {
     log("writing url", await send([{ key: urlKey(self), ...(m.urlValues.has(self) ? { oldValue: m.urlValues.get(self) } : {}), newValue: urlValue }]));
@@ -319,8 +334,8 @@ function startSponsor() {
   mkdirSync(sponsorDir, { recursive: true });
   sponsor = supervise({ bin: sponsorBin, log, args: sponsorArgs({ node: rpcURL(), cookieFile: join(root, "chains/Nexus/.cookie"), key: sponsorKey,
     port: args["sponsor-port"], publicURL: sponsorURL, market: marketPath, storageRate: args["storage-rate"], storageFile: join(sponsorDir, "storage.json"),
-    storageBudget, payTo: self }) });
-  log(`sponsor on ${sponsorURL ? `every interface, port ${args["sponsor-port"]}, public at ${sponsorURL}` : `127.0.0.1:${args["sponsor-port"]} only (no --sponsor-url: the offer names no sponsor)`}`);
+    storageBudget, payTo: self, loopback: args["sponsor-loopback"] }) });
+  log(`sponsor on ${sponsorURL && args["sponsor-loopback"] ? `127.0.0.1:${args["sponsor-port"]}, public at ${sponsorURL} through the proxy beside it` : sponsorURL ? `every interface, port ${args["sponsor-port"]}, public at ${sponsorURL}` : `127.0.0.1:${args["sponsor-port"]} only (no --sponsor-url: the offer names no sponsor)`}`);
 }
 
 /**
@@ -348,7 +363,7 @@ async function fund(first) {
   const sponsorPrivate = sdk.hexToBytes(JSON.parse(readFileSync(sponsorKey, "utf8")).privateKey);
   try {
     const tx = await submit(sdk, rpcURL(), body, sponsorPrivate, authed);
-    const line = `moving ${step.move} market coin of the sponsor key's block rewards to the seller's key for its first writes (lattice-sponsor starts once it has landed)`;
+    const line = `moving ${step.move} market coin of the sponsor key's block rewards to the seller's key for its first writes (the sponsor starts once it has landed)`;
     if (line !== fundLine) log((fundLine = line), tx);
   } catch (e) { log("moving the sponsor's block rewards to the seller's key: not taken yet (will retry)", e.message); }
   return false;
@@ -356,7 +371,7 @@ async function fund(first) {
 
 async function pass() {
   if (root) port = await rpcPort(root, args.lattice, authed);
-  if (!checked) { log(`Lattice ${await nodeVersion(rpcURL(), authed)}`); checked = true; }
+  if (!checked) { log(`node ${await nodeVersion(rpcURL(), authed)}`); checked = true; }
   // The market and the offer's parent first: a fresh node reads neither yet.
   {
     const { fragment, condition } = await readFragment();
@@ -455,7 +470,7 @@ mkdirSync(files.dir, { recursive: true });
 const pidFile = files.pid;
 writeFileSync(pidFile, `${process.pid}\n`);
 const quit = (code) => { pace?.stop(); sponsor?.stop(); rmSync(pidFile, { force: true }); process.exit(code); };
-for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { log("stopping: the pacer and the sponsor stop with the seller"); quit(0); });
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => { log("stopping: the pacer and the sponsor stop with the seller"); quit(0); });
 
 log(`selling hosting on ${marketPath} as ${self}`);
 for (;;) {

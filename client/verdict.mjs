@@ -30,7 +30,7 @@
 // Full and taken are not the buyer's fault, and the host can cause both (its
 // own orders cost it only fees): readers count them against the host as
 // paid, not served.
-import { SETTLE, CREATED_WINDOW, inForce, isClosed, parseOffer, parsePayload, parentOf, moduleCID, parseStorageOffer, parseStorageOrderValue, isRootCID } from "./records.mjs";
+import { SETTLE, CREATED_WINDOW, inForce, isClosed, parseOffer, parsePayload, parentOf, pathPrice, moduleCID, parseStorageOffer, parseStorageOrderValue, isRootCID } from "./records.mjs";
 
 const byHeight = (a, b) => (a.created !== b.created ? (a.created < b.created ? -1 : 1) : a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 
@@ -99,7 +99,7 @@ export function judge({ sdk, height, versions, orders, renewals = [], genesis = 
       .map((p) => ({ ...p, terms: termsAt(key, p.created) }))
       .filter((p) => p.terms && !isClosed(p.terms))
       .sort(byHeight);
-    const paidUntil = payments.reduce((end, p) => (end > p.created ? end : p.created) + (p.paid / p.terms.price) * p.terms.period, 0n);
+    const paidUntil = payments.reduce((end, p) => (end > p.created ? end : p.created) + (p.paid / pathPrice(p.terms, p.path)) * p.terms.period, 0n);
     const until = paidUntil < ends(key) ? paidUntil : ends(key);
     for (const o of owedOrders) verdicts.set(o.key, { kind: "owed", from: o.created + SETTLE, until, active: height < until, order: o.order, payload: o.payload });
   }
@@ -155,7 +155,7 @@ export function judgeStorage({ height, offers, orders }) {
 function voidReason(sdk, o, offer) {
   if (isClosed(offer)) return `the offer was closed at market block ${offer.created}`;
   if (o.created > offer.until) return "created outside the offer's time";
-  if (o.paid < offer.price) return "paid less than one period";
+  if (o.paid < pathPrice(offer, o.path)) return "paid less than one period";
   if (parentOf(o.path) !== offer.parent || o.path.split("/").length !== offer.parent.split("/").length + 1) return `the path is not directly under ${offer.parent}`;
   if (typeof o.payloadText !== "string") return "no payload";
   const payload = parsePayload(o.payloadText);

@@ -69,10 +69,10 @@ test("the seller's first writes are funded from the sponsor key's block rewards,
   assert.match(waiting, /waiting for block rewards\. This seller's blocks pay the sponsor's key \(it holds 2\), and the seller moves 4 from it once it holds 5\./);
   assert.match(waiting, new RegExp(`Not to wait, send 3 coin on Nexus/testnet/lodger to ${HOST}, or earn it with this machine: hearth earn`));
   assert.match(fundingStep({ ...at, seller: 0n, sponsor: 5000n, canMove: true, otherSponsor: "8650" }).wait,
-    /^a lattice-sponsor already answers on port 8650 and may sign with the sponsor's key, so the seller moves nothing from it: stop that sponsor, or send 3 coin/,
+    /^a sponsor already answers on port 8650 and may sign with the sponsor's key, so the seller moves nothing from it: stop that sponsor, or send 3 coin/,
     "a sponsor on the port may sign with the same key: nothing moved");
   const remote = fundingStep({ ...at, seller: 0n, sponsor: 5000n, canMove: false }).wait;
-  assert.match(remote, /^Send at least 3 coin .* hearth sweep moves them here while no lattice-sponsor signs with it\.$/, "a sponsor signs with the key already, or --node: never moved here");
+  assert.match(remote, /^Send at least 3 coin .* hearth sweep moves them here while no sponsor signs with it\.$/, "a sponsor signs with the key already, or --node: never moved here");
 });
 
 test("a pass reports both balances, what buyers paid and what is owed, and storage against the budget", () => {
@@ -87,7 +87,7 @@ test("a pass reports both balances, what buyers paid and what is owed, and stora
     "storage pinned by the sponsor: 12.0 MiB of its 256.0 MiB budget, 1.0 MiB held for uploads being paid, 243.0 MiB left",
   ]);
   assert.deepEqual(report({ market: "M", height: 1n, seller: { address: "S", balance: 0n }, sponsor: { address: "P", balance: 0n }, mine: [], renewals: [], counts: {},
-    until: new Map(), earned: 0n, settling: 0n }).slice(2), ["owes hosting to no chain now", "storage: no lattice-sponsor reporting it on the sponsor port (not running yet, or older than its storage report)"]);
+    until: new Map(), earned: 0n, settling: 0n }).slice(2), ["owes hosting to no chain now", "storage: no sponsor reporting it on the sponsor port (not running yet, or older than its storage report)"]);
 });
 
 test("earned counts only other buyers' payments for hosting owed: not void orders, the seller's own, or renewals after a close", () => {
@@ -274,16 +274,16 @@ test("`hearth sell` beside a node older than 4.0.1 says so and stops", async () 
   try {
     const { code, out } = await sell(node);
     assert.equal(code, 2, out);
-    assert.match(out, /Hearth needs Lattice 5\.0\.0 or newer \(you have 4\.0\.0: its GET \/config does not say which layer lists each chain\)/);
+    assert.match(out, /Hearth needs node 5\.0\.0 or newer \(you have 4\.0\.0: its GET \/config does not say which layer lists each chain\)/);
     assert.deepEqual(node.puts, [], "it changes nothing on the node");
     // A 4.0.0 `lattice` has no `config`: lattice.json finds the node, only to say this.
     const old = join(temp(), "lattice");
     writeFileSync(old, "#!/bin/sh\necho \"Error: Unexpected argument 'config'\" >&2\nexit 64\n", { mode: 0o755 });
     const viaFile = await hearth(["sell", "--price", "100/day", "--root", node.root, "--once", "--lattice", old, "--sponsor-bin", node.sponsor]);
-    assert.match(viaFile.out, /Hearth needs Lattice 5\.0\.0 or newer \(you have 4\.0\.0: its GET \/config does not say which layer lists each chain\)/);
+    assert.match(viaFile.out, /Hearth needs node 5\.0\.0 or newer \(you have 4\.0\.0: its GET \/config does not say which layer lists each chain\)/);
     const burnt = await hearth(["burn", "5", "--chain", DEFAULT_MARKET, "--root", node.root, "--lattice", node.lattice]);
     assert.equal(burnt.code, 2);
-    assert.match(burnt.out, /Hearth needs Lattice 5\.0\.0 or newer/);
+    assert.match(burnt.out, /Hearth needs node 5\.0\.0 or newer/);
   } finally { node.close(); }
 });
 
@@ -345,14 +345,21 @@ test("`hearth sell` runs lattice-sponsor beside the node with a key of its own, 
   } finally { node.close(); }
 });
 
-test("without lattice-sponsor, `hearth sell` says where to get it; --mine is gone", async () => {
+test("a missing --sponsor-bin says where to get one; with none on PATH, Hearth uses its own; --mine is gone", async () => {
   const node = await freshNode();
   try {
     const { code, out } = await hearth(["sell", "--price", "100/day", "--root", node.root, "--once", "--lattice", node.lattice, "--sponsor-bin", "/nonexistent/lattice-sponsor"]);
     assert.equal(code, 2);
-    assert.match(out, /no lattice-sponsor at \/nonexistent\/lattice-sponsor: .*https:\/\/lattice\.build\/docs\/.*--sponsor-bin/);
-    const onPath = await hearth(["sell", "--price", "100/day", "--root", node.root, "--once", "--lattice", node.lattice], { PATH: dirname(process.execPath) });
-    assert.match(onPath.out, /no lattice-sponsor at lattice-sponsor on PATH/);
+    assert.match(out, /no sponsor at \/nonexistent\/lattice-sponsor: .*give --sponsor-bin <path> to one, or leave --sponsor-bin out and Hearth runs its own/);
+    // None on PATH: Hearth's own, installed under ~/.hearth (here already there, so nothing downloads).
+    const home = temp();
+    for (const bin of ["lattice-node-5.0.0/lattice", "lattice-node-5.0.0/lattice-node", "lattice-sponsor-1.0.0/lattice-sponsor"]) {
+      mkdirSync(dirname(join(home, ".hearth/bin", bin)), { recursive: true });
+      writeFileSync(join(home, ".hearth/bin", bin), "#!/bin/sh\nexit 1\n");
+      chmodSync(join(home, ".hearth/bin", bin), 0o755);
+    }
+    const own = await hearth(["sell", "--price", "100/day", "--root", node.root, "--once", "--lattice", node.lattice], { PATH: dirname(process.execPath), HOME: home });
+    assert.doesNotMatch(own.out, /no lattice-sponsor/, own.out);
     const mine = await sell(node, ["--mine", "1TH/s"]);
     assert.equal(mine.code, 2);
     assert.match(mine.out, /Unknown option '--mine'/);
@@ -379,6 +386,15 @@ test("`hearth sell --install` writes the node's and the seller's units for this 
   assert.ok(unit.includes(join(bin, "node")) && !unit.includes(process.execPath), "the node on PATH, not this process's resolved path");
   assert.ok(unit.includes(join(node.root, `hearth/${offerFromFlags({ price: "100/day" }).id}.json`)) && unit.includes(node.sponsor));
   assert.ok(unit.includes("--resume"), "a service restart never reopens a closed offer");
+  assert.ok(!unit.includes("--public") && !unit.includes("--sponsor-loopback"), "a node of your own is not made public unless --public");
+  // With --public, the service runs `hearth sell --public`, and every flag it carries is one hearth sell takes.
+  const pub = await hearth(["sell", "--price", "100/day", "--root", node.root, "--install", "--public", "--lattice", node.lattice, "--sponsor-bin", node.sponsor], { HOME: home, PATH: `${bin}:${process.env.PATH}` });
+  assert.equal(pub.code, 0, pub.out);
+  const pubUnit = readFileSync(file, "utf8");
+  assert.ok(pubUnit.includes("--public") && !pubUnit.includes("--sponsor-loopback"), pubUnit);
+  const flags = [...pubUnit.matchAll(/--([a-z][a-z-]*)/g)].map((m) => m[1]);
+  const accepted = readFileSync(new URL("../bin/hearth.mjs", import.meta.url), "utf8");
+  for (const f of new Set(flags)) if (!["user", "now", "no-block"].includes(f)) assert.ok(accepted.includes(`"${f}"`) || accepted.includes(` ${f}: {`), `the service passes --${f}, which hearth sell must take`);
   assert.ok(existsSync(join(node.root, "hearth/reopen")) && !existsSync(join(node.root, "hearth/closing")), "but installing puts the offer on sale: the service's next start writes it once");
   assert.match(out, process.platform === "darwin" ? /launchctl bootstrap gui\/\$\(id -u\) .*net\.hearth\.node\.plist && launchctl bootstrap/ : /systemctl --user enable --now hearth-node.service hearth.service/);
 });
@@ -446,12 +462,12 @@ test("a bad flag is refused before `hearth sell` writes anything", async () => {
   } finally { node.close(); }
 });
 
-test("--root where no Lattice node lives says so and exits", async () => {
+test("--root where no node lives says so and exits", async () => {
   const empty = temp();
   for (const verb of [["sell", "--price", "100/day"], ["status"], ["stop"], ["sweep"]]) {
     const { code, out } = await hearth([...verb, "--root", empty]);
     assert.equal(code, 2, out);
-    assert.equal(out.trim(), `hearth: no Lattice node at ${empty}: give the root of one (lattice init --root <dir>, then lattice up --root <dir>), or --node with --token-file`);
+    assert.equal(out.trim(), `hearth: no node at ${empty}: give the root of a node, or --node with --token-file, or neither and Hearth runs its own`);
   }
   assert.equal(existsSync(join(empty, "hearth")), false, "no key made there");
 });
@@ -488,7 +504,7 @@ test("`hearth unpin <cid>` takes a file down on the sponsor beside the node, wit
   } finally { sponsor.close(); }
   const none = await hearth(["unpin", CID, "--root", node.root, "--sponsor-port", port]);
   assert.equal(none.code, 2);
-  assert.match(none.out, new RegExp(`no lattice-sponsor answers on 127\\.0\\.0\\.1:${port}: unpin while the seller \\(and its sponsor\\) runs`));
+  assert.match(none.out, new RegExp(`no sponsor answers on 127\\.0\\.0\\.1:${port}: unpin while the seller \\(and its sponsor\\) runs`));
 });
 
 test("`hearth sweep` while the seller runs says how to pause it without closing its offers", async () => {
@@ -502,7 +518,7 @@ test("`hearth sweep` while the seller runs says how to pause it without closing 
     writeFileSync(join(node.root, "hearth/seller.pid"), `${seller.pid}\n`);
     const { code, out } = await hearth(["sweep", "--root", node.root, "--lattice", node.lattice], { HOME: temp() });
     assert.equal(code, 2, out);
-    assert.match(out, new RegExp(`the seller \\(pid ${seller.pid}\\) runs lattice-sponsor with the sponsor's key`));
+    assert.match(out, new RegExp(`the seller \\(pid ${seller.pid}\\) runs the sponsor with the sponsor's key`));
     assert.match(out, /stop it \(Ctrl-C, or kill its pid\), run hearth sweep, then start it again with the same hearth sell flags and --resume/);
     assert.match(out, /Its offers stay on sale meanwhile \(hearth stop would close them\)\. The seller funds its first writes from the sponsor's key by itself\./);
   } finally { seller.kill(); node.close(); }
@@ -538,7 +554,7 @@ test("`hearth unpin` beside a node that is not running says to start it", async 
   writeFileSync(join(root, "lattice.json"), "{}");
   const { code, out } = await hearth(["unpin", "bafyreigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi", "--root", root]);
   assert.equal(code, 2, out);
-  assert.match(out, new RegExp(`the Lattice node at ${root} is not running \\(no chains/Nexus/\\.cookie\\): start it`));
+  assert.match(out, new RegExp(`the node at ${root} is not running \\(no chains/Nexus/\\.cookie\\): start the seller \\(hearth sell\\), then unpin`));
   assert.doesNotMatch(out, /ENOENT/);
 });
 

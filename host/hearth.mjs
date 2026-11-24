@@ -114,7 +114,7 @@ export function fundingStep({ fee, seller, sponsor, canMove, otherSponsor, chain
   const move = 4n * fee - seller;
   const send = `send ${3n * fee - seller} coin on ${chain} to ${address}, or earn it with this machine: hearth earn --sponsor <url>`;
   if (canMove && otherSponsor !== undefined) {
-    return { wait: `a lattice-sponsor already answers on port ${otherSponsor} and may sign with the sponsor's key, so the seller moves nothing from it: `
+    return { wait: `a sponsor already answers on port ${otherSponsor} and may sign with the sponsor's key, so the seller moves nothing from it: `
       + `stop that sponsor, or ${send}. Checking again every ${interval} s.` };
   }
   if (canMove && sponsor >= move + fee) return { move };
@@ -123,7 +123,7 @@ export function fundingStep({ fee, seller, sponsor, canMove, otherSponsor, chain
       + `This seller's blocks pay the sponsor's key (it holds ${sponsor}), and the seller moves ${move} from it once it holds ${move + fee}. `
       + `Not to wait, ${send}. Checking again every ${interval} s.`
     : fundingMessage({ address, need: { chain, amount: 3n * fee, balance: seller }, interval })
-      + " The sponsor's key holds the block rewards: hearth sweep moves them here while no lattice-sponsor signs with it." };
+      + " The sponsor's key holds the block rewards: hearth sweep moves them here while no sponsor signs with it." };
 }
 
 const SIZE_UNITS = { "": 1, k: 2 ** 10, m: 2 ** 20, g: 2 ** 30, t: 2 ** 40 };
@@ -194,6 +194,11 @@ export function checkSellFlags(a) {
     throw new Error(`--parent is a chain path from Nexus, e.g. Nexus, not ${a.parent}`);
   }
   const offerId = a.price ? offerFromFlags({ price: a.price, parent: a.parent, chains: a.chains, id: a.id }).id : undefined;
+  if (a.proof && !a.url) throw new Error("--proof goes with --url");
+  if (a.public && a["key-only"]) throw new Error("give --public or --key-only, not both");
+  if (a["key-only"] && (a.url || a.proof || a["sponsor-url"])) throw new Error("--key-only writes no URL: leave out --url, --proof and --sponsor-url");
+  if (a.public && (a.url || a.proof || a["sponsor-url"])) throw new Error("--public makes the URL itself: leave out --url, --proof and --sponsor-url");
+  if (a.public && a.node) throw new Error("--public needs the node beside it: give --root, or neither (Hearth runs its own), not --node");
   if (a["burn-chain"] && !a.burn) throw new Error("--burn-chain goes with --burn");
   if (a.burn) { parseAmount(a.burn, "--burn"); burnChain(a["burn-chain"] ?? a.market, a.market); }
   if (a.fee !== undefined) parseAmount(a.fee, "--fee");
@@ -219,7 +224,7 @@ export function checkSellFlags(a) {
  */
 export function checkRoot(root) {
   if (!existsSync(join(root, "lattice.json")) && !existsSync(join(root, "chains/Nexus"))) {
-    throw new Error(`no Lattice node at ${root}: give the root of one (lattice init --root <dir>, then lattice up --root <dir>), or --node with --token-file`);
+    throw new Error(`no node at ${root}: give the root of a node, or --node with --token-file, or neither and Hearth runs its own`);
   }
   return root;
 }
@@ -235,7 +240,7 @@ const UNITS = { hour: 3600, day: 86400, week: 604800 };
 export function findRoot({ cwd, home }) {
   const tried = [cwd, join(home, ".lattice")];
   const root = tried.find((dir) => existsSync(join(dir, "chains/Nexus/.cookie")));
-  if (!root) throw new Error(`no running Lattice node under ${tried.join(" or ")}: start one (lattice up), or give --root, or --node with --token-file`);
+  if (!root) throw new Error(`no running node under ${tried.join(" or ")}`);
   return root;
 }
 
@@ -330,7 +335,7 @@ export function rpcPort(root, lattice = "lattice", fetchImpl = (...a) => fetch(.
   return new Promise((ok, fail) => execFile(lattice, ["config", "get", "rpc", "--root", root], { timeout: 120_000 }, (error, stdout, stderr) => {
     if (!error) { try { return ok(Number(JSON.parse(stdout))); } catch (e) { return fail(new Error(`${lattice} config get rpc: ${e.message}`)); } }
     const why = new Error(error.code === "ENOENT" ? `${lattice} is not on PATH: give --lattice <path>`
-      : /Unknown option '--root'|Unexpected argument 'config'|Unknown subcommand/.test(stderr) ? `${lattice} is older than Lattice ${MIN_NODE} (it has no \`lattice config get\`): give --lattice <path> to the lattice beside your node`
+      : /Unknown option '--root'|Unexpected argument 'config'|Unknown subcommand/.test(stderr) ? `${lattice} is older than ${MIN_NODE} (it has no \`config get\`): give --lattice <path> to the lattice beside your node`
       : `${lattice} config get rpc: ${error.message}\n${stderr}`);
     let port;
     try { port = JSON.parse(readFileSync(join(root, "lattice.json"), "utf8")).rpc ?? 8080; } catch { return fail(why); }
@@ -356,7 +361,7 @@ export async function nodeVersion(url, fetchImpl = (...a) => fetch(...a)) {
   // A fresh node lists no chain (Nexus is never listed): its fragments,
   // which came with `from`, say it is new enough.
   if (!Array.isArray(config?.fragments) || !Array.isArray(chains) || !chains.every((c) => Array.isArray(c.from))) {
-    throw Object.assign(new Error(`Hearth needs Lattice ${MIN_NODE} or newer (you have ${status?.version ?? "an older one"}: its GET /config does not say which layer lists each chain)`), { tooOld: true });
+    throw Object.assign(new Error(`Hearth needs node ${MIN_NODE} or newer (you have ${status?.version ?? "an older one"}: its GET /config does not say which layer lists each chain)`), { tooOld: true });
   }
   return status?.version ?? "unknown";
 }
@@ -467,7 +472,7 @@ export function serviceUnits({ platform, home, command, nodeCommand, path }) {
     return {
       units: [
         ...(nodeCommand ? [{ file: join(dir, "hearth-node.service"), content: `[Unit]
-Description=Lattice node for Hearth
+Description=Node for Hearth
 
 [Service]
 ExecStart=${nodeCommand.map(systemdWord).join(" ")}
@@ -480,7 +485,7 @@ TimeoutStopSec=90
 WantedBy=default.target
 ` }] : []),
         { file: join(dir, "hearth.service"), content: `[Unit]
-Description=Hearth seller: sells hosting from this Lattice node${nodeCommand ? `
+Description=Hearth seller: sells hosting from this node${nodeCommand ? `
 After=hearth-node.service
 Requires=hearth-node.service` : ""}
 

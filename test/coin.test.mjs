@@ -94,7 +94,7 @@ test("sell-coin refuses while the seller runs or a lattice-sponsor answers: they
     const args = ["sell-coin", "100", "--price", "5", "--node", "http://127.0.0.1:9", "--token-file", "/dev/null", "--key", key];
     const sponsor = await hearth([...args, "--sponsor-port", String(server.address().port)]);
     assert.equal(sponsor.code, 2);
-    assert.match(sponsor.out, /a lattice-sponsor answers on port \d+: stop it before selling coin/);
+    assert.match(sponsor.out, /a sponsor answers on port \d+: stop it before selling coin/);
     // A seller beside the key (its pid file names a running sell-hosting.mjs).
     const seller = spawn(process.execPath, ["-e", "setTimeout(() => {}, 20000)", "sell-hosting.mjs"]);
     writeFileSync(join(dir, "seller.pid"), String(seller.pid));

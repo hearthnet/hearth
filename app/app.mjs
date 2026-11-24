@@ -9,7 +9,7 @@
 import * as sdk from "../vendor/lattice-sdk.js";
 import { reader, holdsVolume } from "../client/market.mjs";
 import { judge, judgeStorage, sameGenesis } from "../client/verdict.mjs";
-import { parseOffer, parseOrderKey, parsePayload, parseStorageOffer, parseHostURL, offerAt, isClosed, moduleCID, isAddress, SETTLE, burnAddress, pathFromNexus } from "../client/records.mjs";
+import { parseOffer, parseOrderKey, parsePayload, parseStorageOffer, parseHostURL, sponsorAt, offerAt, isClosed, moduleCID, isAddress, SETTLE, burnAddress, pathFromNexus, pathPrice } from "../client/records.mjs";
 import { checkListed, checkServing, sponsorURL as askable } from "../client/service.mjs";
 import { snippet } from "./snippet.mjs";
 import { uniqueNodes, nodesNow, chooseAnchor, disagreeMessage, blocksTime, CHECKPOINT_AFTER, WALK } from "./anchor.mjs";
@@ -63,6 +63,27 @@ async function findNode() {
 }
 if (!cfg.node) cfg.node = await findNode();
 const r = reader(sdk, cfg.node);
+
+/**
+ * A reader of `chainPath` (an offer's parent, which the market's node may
+ * not host): the app's node when it serves the chain, else the fastest node
+ * the entry lists for it, as `findNode` finds the market's.
+ */
+const readers = new Map();
+async function readerOf(chainPath) {
+  if (readers.has(chainPath)) return readers.get(chainPath);
+  const path = chainPath.split("/");
+  let found;
+  try { await r.api("/api/chain/info", chainPath); found = r; } catch {}
+  if (!found) {
+    let hosts = [];
+    try { hosts = await new sdk.EndpointResolver(new sdk.NodeClient(cfg.entry, ["Nexus"])).resolve(path, AbortSignal.timeout(10_000)); } catch {}
+    try { found = reader(sdk, await Promise.any(hosts.map(async ({ url }) => { await new sdk.NodeClient(url, path).chainInfo(AbortSignal.timeout(5_000)); return url; }))); }
+    catch { throw new Error(`No node found that serves ${chainPath}. Try again, or give ?node= a node that serves it and the market.`); }
+  }
+  readers.set(chainPath, found);
+  return found;
+}
 
 // ---- small helpers ----
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -133,6 +154,8 @@ async function loadMarket(force = false) {
     // Each offer's terms: the version in force at the tip (market.mjs), the
     // one an order placed now goes by. A newer version shows once in force.
     m.terms = new Map([...m.offers].map(([k, t]) => [k, parseOffer(t)]).filter(([, o]) => o));
+    // A sponsor named by its path is on the host's url record's origin, as it is now.
+    for (const [k, o] of m.terms) if (o.sponsor !== undefined) o.sponsor = sponsorAt(o.sponsor, m.urlValues.get(k.split("/")[0]));
     m.storage = new Map([...m.offers].map(([k, t]) => [k, parseStorageOffer(t)]).filter(([, o]) => o));
     // Storage orders apart: every other view is about chains.
     m.storageOrders = m.orders.filter((o) => m.storage.has(`${o.host}/${o.id}`));
@@ -236,6 +259,7 @@ async function route() {
   try {
     await (routes[name] ?? viewLaunch)(view, decodeURIComponent(rest.join("/")), () => id === renderId);
   } catch (e) {
+    console.error(e);
     if (id === renderId) view.innerHTML = `<div class="notice bad">Could not read the market from ${esc(cfg.node)}: ${esc(e.message)}. <a href="" onclick="location.reload();return false">Try again</a></div>`;
   }
   window.scrollTo?.(0, 0);
@@ -258,7 +282,7 @@ const RULES = {
   anyone: { label: "Anyone can write", hint: "Anyone can write any key, and change or delete it." },
   own: { label: "Each person edits only their own keys", hint: "Every key ends with its writer's address, like <span class=\"mono\">events/42/&lt;address&gt;</span>, and only that person can change or delete it. Lists still read by prefix: <span class=\"mono\">events/</span> lists everyone's.", file: "own_keys.wasm" },
   once: { label: "Append-only (write once)", hint: "Anyone can add a new key; nobody can change or delete it after.", file: "write_once.wasm" },
-  custom: { label: "Upload your own .wasm (advanced)", hint: "Lattice policy modules you built. Hosts list the modules they run; some run any." },
+  custom: { label: "Upload your own .wasm (advanced)", hint: "Policy modules you built. Hosts list the modules they run; some run any." },
 };
 const rulesReady = Promise.all(Object.values(RULES).filter((x) => x.file).map(async (x) => {
   const bytes = new Uint8Array(await (await fetch(new URL(`./rules/${x.file}`, import.meta.url))).arrayBuffer());
@@ -367,7 +391,9 @@ async function viewLaunch(view, _, current) {
       && s.maxBlockSize <= o.maxBlockSize && s.maxStateGrowth <= o.maxStateGrowth && s.targetBlockTime >= o.minTargetBlockTime
       && s.maxNumberOfTransactionsPerBlock <= o.maxNumberOfTransactionsPerBlock
       && (o.modules === "any" || want.every((c) => o.modules.includes(c))));
-    fits.sort(([, a], [, b]) => (a.price * b.period < b.price * a.period ? -1 : 1));
+    // One period of a chain launched under the offer's parent: with `whole path`, each chain on the path.
+    const chainPrice = (o) => pathPrice(o, `${o.parent}/-`);
+    fits.sort(([, a], [, b]) => (chainPrice(a) * b.period < chainPrice(b) * a.period ? -1 : 1));
     const room = (k, o) => o.capacity - (counted.get(k) ?? 0n);
     // One offer per host, its cheapest with room, so each pick is another host.
     const byHost = new Map();
@@ -394,7 +420,7 @@ async function viewLaunch(view, _, current) {
           const full = left <= 0n, elsewhere = parent && o.parent !== parent;
           return `<tr><td><input type="checkbox" name="offer" value="${esc(k)}" ${chosen.includes(k) ? "checked" : ""} ${full || elsewhere ? "disabled" : ""} aria-label="Choose ${esc(short(host))}"></td>
             <td><div>${esc(hostName(host))}${m.vouched.get(host)?.keyOnly ? ` ${keyOnlyPill}` : ""}</div></td>
-            <td class="num"><b>${fmt(o.price)}</b> <span class="muted small">per ${duration(o.period)}</span></td>
+            <td class="num"><b>${fmt(chainPrice(o))}</b> <span class="muted small">per ${duration(o.period)}${o.wholePath ? `<br>${fmt(o.price)} for each of the ${pathFromNexus(`${o.parent}/-`).length} chains on the path` : ""}</span></td>
             <td>${full ? `<span class="pill bad">Full</span>` : `<span class="small">${fmt(left)} of ${fmt(o.capacity)}</span>`}</td>
             <td class="small">${recordLine(st)}</td></tr>`;
         }).join("")}</tbody></table></div>`;
@@ -411,10 +437,10 @@ async function viewLaunch(view, _, current) {
     $("#pathFull").textContent = path || "…";
     const lengths = [...new Set(offers.map(([, o]) => o.period))];
     $("#periodHint").textContent = lengths.length === 1 ? `× ${duration(lengths[0])} = ${duration(lengths[0] * periods)}` : "";
-    const cost = offers.reduce((sum, [, o]) => sum + o.price * periods, 0n);
+    const cost = offers.reduce((sum, [, o]) => sum + chainPrice(o) * periods, 0n);
     $("#cost").innerHTML = offers.length === 0 ? ""
       : offers.length === 1 ? `<b>${fmt(cost)} ${coinName}</b> for ${duration(offers[0][1].period * periods)} of hosting`
-      : `<b>${fmt(cost)} ${coinName}</b>: ${offers.map(([k, o]) => `${fmt(o.price * periods)} for ${duration(o.period * periods)} at ${esc(hostName(k.split("/")[0]))}`).join(", ")}`;
+      : `<b>${fmt(cost)} ${coinName}</b>: ${offers.map(([k, o]) => `${fmt(chainPrice(o) * periods)} for ${duration(o.period * periods)} at ${esc(hostName(k.split("/")[0]))}`).join(", ")}`;
     const out = { offers, texts: chosen.map((k) => [k, m.offers.get(k)]), path, periods, s: spec(), mods, nameOK };
     const note = $("#launchNote");
     const button = $("#launch");
@@ -471,7 +497,7 @@ async function viewLaunch(view, _, current) {
       // after, the coin bought stays in this browser's account.
       await loadBalances();
       if (!balances.market || !balances.parent) throw new Error(`Could not read your balance from ${cfg.node}. Try again.`);
-      const cost = offers.reduce((sum, [, o]) => sum + o.price * periods, 0n), need = cost + marketFee;
+      const cost = offers.reduce((sum, [, o]) => sum + pathPrice(o, path) * periods, 0n), need = cost + marketFee;
       const missing = need - balances.market.balance;
       if (missing > 0n) {
         await readSales();
@@ -502,7 +528,7 @@ async function viewLaunch(view, _, current) {
       }
       const hosts = new Set(offers.map(([k]) => k.split("/")[0]));
       const takenHere = fresh.orders.some((x) => hosts.has(x.host) && x.path === path && ["owed", "pending"].includes(verdicts.get(x.key)?.kind) && x.buyer !== me.address);
-      const exists = await r.hasChild(offers[0][1].parent, path.split("/").at(-1));
+      const exists = await (await readerOf(offers[0][1].parent)).hasChild(offers[0][1].parent, path.split("/").at(-1));
       if (takenHere || exists) throw new Error(`${path} is already ${exists ? "a chain" : "ordered at one of these hosts"}; pick another name.`);
       button.textContent = offers.length > 1 ? "Paying the hosts…" : "Paying the host…";
       const payload = { spec: s, premineTo: s.premine > 0n ? me.address : null, modules: mods, genesisTransactions: [] };
@@ -569,7 +595,7 @@ async function viewCoin(view, _, current) {
   view.innerHTML = `
   <section>
     <h1>Buy ${coinName}</h1>
-    <p class="lead">Hosts are paid in ${coinName}. You buy it with ${esc(parentCoin)}, and Lattice checks both sides of the trade: nobody holds your payment in between. Launching an app buys what it needs for you.</p>
+    <p class="lead">Hosts are paid in ${coinName}. You buy it with ${esc(parentCoin)}, and the chains check both sides of the trade: nobody holds your payment in between. Launching an app buys what it needs for you.</p>
   </section>
   <section class="stack" id="you"></section>
   <section class="stack"><div class="row"><h2>For sale</h2><span class="spacer"></span><button class="btn small" id="reload">Refresh</button></div><div id="deposits"><p class="muted">Reading the market…</p></div></section>
@@ -590,6 +616,7 @@ async function viewCoin(view, _, current) {
     </details>
   </section>`;
   const you = () => {
+    if (!$("#you")) return;   // a balance read landing after the page changed
     $("#you").innerHTML = me
       ? `<div class="grid"><div class="card soft"><p class="muted small">${coinName}</p><p class="stat">${balances.market ? fmt(balances.market.balance) : "…"}</p></div>
          <div class="card soft"><p class="muted small">${esc(parentCoin)} to pay with</p><p class="stat">${balances.parent ? fmt(balances.parent.balance) : "…"}</p></div>
@@ -885,7 +912,7 @@ async function viewHosts(view, _, current) {
         <div><p class="muted small">Paid, not served</p><p class="stat" style="${s && s.full + s.taken ? "color:var(--bad)" : ""}">${s ? s.full + s.taken : 0}</p><p class="small muted">${s && s.unserved ? `${fmt(s.unserved)} ${coinName} paid` : "Orders it took and did not owe"}</p></div>
         <div><p class="muted small">Void</p><p class="stat">${s?.void ?? 0}</p><p class="small muted">The buyer's order broke the offer's terms</p></div>
       </div>
-      ${offers.length === 0 ? `<p class="small muted">No open offers now.</p>` : `<div class="table-scroll"><table><thead><tr><th>Offer</th><th class="num">Price</th><th>Limits</th><th>Modules</th><th>Mines</th><th>Ends</th></tr></thead><tbody>${offers.map(([k, o]) => `<tr><td class="mono">${esc(k.split("/")[1])}</td><td class="num">${fmt(o.price)} / ${duration(o.period)}</td>
+      ${offers.length === 0 ? `<p class="small muted">No open offers now.</p>` : `<div class="table-scroll"><table><thead><tr><th>Offer</th><th class="num">Price</th><th>Limits</th><th>Modules</th><th>Mines</th><th>Ends</th></tr></thead><tbody>${offers.map(([k, o]) => `<tr><td class="mono">${esc(k.split("/")[1])}</td><td class="num">${fmt(o.price)} / ${duration(o.period)}${o.wholePath ? `<br><span class="muted">per chain on the path</span>` : ""}</td>
         <td class="small">${fmt(o.maxBlockSize / 1000n)} kB blocks, ≥ ${Number(o.minTargetBlockTime) / 1000} s, ${fmt(o.maxNumberOfTransactionsPerBlock)} tx</td><td class="small">${o.modules === "any" ? "any" : `${o.modules.length} listed`}</td>
         <td class="small">${o.mines ? `claims ${formatRate(o.mines)}` : `<span class="muted">no claim</span>`}</td>
         <td class="small">in ${duration(o.until - m.height)}</td></tr>`).join("")}</tbody></table></div>`}
@@ -1054,7 +1081,8 @@ async function viewOrder(view, key, current) {
     ? `Pins block ${fmt(anchor.height)}; refresh it when you redeploy, about every ${fmt(WALK)} blocks (${blocksTime(WALK, blockTime)} at this chain's block time).`
     : `Pins the chain's genesis; once the chain is past ${fmt(CHECKPOINT_AFTER)} blocks (${blocksTime(Number(CHECKPOINT_AFTER), blockTime)} at this chain's block time), copy it again to pin a recent block.`;
   const use = { sdkURL: SDK_URL, chain: o.path, anchor, nodes, sponsors: [...new Set(hosting.map(([, k]) => sponsorURL(m.terms.get(k))).filter(Boolean))], ownKeys };
-  const snippetBlock = !rulesKnown ? `<div class="notice bad">The rule presets did not load, so this page can't tell which keys this chain lets you write. <a href="" onclick="location.reload();return false">Reload</a> to try again.</div>`
+  // Built only once the chain serves: before that there is no genesis to pin.
+  const snippetBlock = () => !rulesKnown ? `<div class="notice bad">The rule presets did not load, so this page can't tell which keys this chain lets you write. <a href="" onclick="location.reload();return false">Reload</a> to try again.</div>`
     : !node ? `<div class="notice bad">This host's read URL is not a valid https URL, so there is nothing to connect to.</div>`
     : `<p class="muted">${SDK_TAG ? "Paste this into any web page. It" : "Test write"} writes one key and reads it back, checking what it reads against a pinned block. ${pinNote} ${nodes.length > 1 ? `It reads a block only once two of your hosts' nodes hold it.` : `Only one of your hosts publishes a node, so its reads trust that one node: it could serve a made-up block. Order from a host of another operator to check it.`} ${use.sponsors.length ? "Your hosts' sponsors pay the write fees: the writer's device does a few seconds of work instead." : "None of the hosts you ordered from names a sponsor, so whoever writes needs coin on this chain to pay the fee."}</p>
      ${SDK_TAG ? `<pre class="mono card soft" style="white-space:pre-wrap;margin:0" id="snippet">${esc(snippet(use))}</pre>` : `<p class="small muted">The code to paste appears here once a release of the SDK is tagged. Test write works now.</p>`}
@@ -1077,8 +1105,8 @@ async function viewOrder(view, key, current) {
      <div class="grid"><div><p class="muted small">Height</p><p class="stat">${fmt(p.height)}</p></div><div><p class="muted small">Latest block</p><p class="stat" style="font-size:20px">${p.time ? ago(p.time) : "—"}</p></div>
      <div><p class="muted small">Paid until</p><p class="stat" style="font-size:20px">${v.active ? `in ${duration(v.until - m.height)}` : "ended"}</p></div></div>
      <p class="small" id="making" hidden></p>
-     ${snippetBlock}</section>` : ""}
-  ${v.kind === "owed" || v.kind === "pending" ? `<section class="stack"><h2>Keep it running</h2><p class="muted">When paid time ends, this host may stop hosting the chain and drop its data; anyone still hosting it keeps it. ${renewable ? `Anyone can pay for more time. Each period is ${duration(offer.period)} for ${fmt(offer.price)} ${coinName}${offer.until < (v.until ?? 0n) + offer.period ? `; this offer ends in ${duration(offer.until - m.height)}, and no time past that is owed` : ""}.` : "This offer is closed, so it sells no more time here."}</p>
+     ${snippetBlock()}</section>` : ""}
+  ${v.kind === "owed" || v.kind === "pending" ? `<section class="stack"><h2>Keep it running</h2><p class="muted">When paid time ends, this host may stop hosting the chain and drop its data; anyone still hosting it keeps it. ${renewable ? `Anyone can pay for more time. Each period is ${duration(offer.period)} for ${fmt(pathPrice(offer, path))} ${coinName}${offer.until < (v.until ?? 0n) + offer.period ? `; this offer ends in ${duration(offer.until - m.height)}, and no time past that is owed` : ""}.` : "This offer is closed, so it sells no more time here."}</p>
      ${renewable ? `<div class="row"><div style="width:120px"><input id="more" type="number" min="1" value="7" aria-label="Periods"></div><button class="btn primary" id="renew" ${v.kind !== "owed" ? "disabled" : ""}>Pay for more</button><span class="small" id="renewNote"></span></div>` : ""}</section>` : ""}`;
   // Whether the hosts you ordered from make this chain's blocks, read by CID.
   const makers = hosting.map(([x]) => x).filter((x) => m.terms.get(`${x.host}/${x.id}`)?.blocks);
@@ -1120,7 +1148,7 @@ async function viewOrder(view, key, current) {
         // Priced at the version in force at the height the renewal names.
         const now = offerAt(fresh.versions.get(`${o.host}/${o.id}`), fresh.height);
         if (!now || !isOpen(fresh, now)) throw new Error("This offer has closed: it sells no more time.");
-        if (now.price !== offer.price || now.period !== offer.period) throw new Error(`The offer's terms changed: now ${fmt(now.price)} ${coinName} per ${duration(now.period)}. Reload to pay at them.`);
+        if (pathPrice(now, o.path) !== pathPrice(offer, o.path) || now.period !== offer.period) throw new Error(`The offer's terms changed: now ${fmt(pathPrice(now, o.path))} ${coinName} per ${duration(now.period)}. Reload to pay at them.`);
         const w = renewWrite({ host: o.host, id: o.id, offer: now, payer: me.address, path: o.path, periods, height: fresh.height });
         const { nonce } = await r.account(cfg.market, me.address);
         return recordsBody({ signer: me.address, nonce, chainPath: marketPath, actions: w.actions, payments: w.payments, fee: await fee(cfg.market) });
@@ -1157,7 +1185,7 @@ async function viewWallet(view) {
       if (address !== me?.address) earning?.stop("Stopped: this browser uses another account now.");
       me = { privateKey, address };
       await loadBalances(); route();
-    } catch (err) { $("#importNote").textContent = `That file is not a Lattice key: ${err.message}`; }
+    } catch (err) { $("#importNote").textContent = `That file is not a key: ${err.message}`; }
   };
 }
 
