@@ -3,8 +3,9 @@
 A home for your chain.
 
 Launch a chain without running a node. You buy coin, mint your chain's
-genesis in your browser, and pay a host by the period to run it: the host
-stores the genesis and every block after it, and mines it. Anyone can check
+genesis in your browser (with its proof of work, trivial at a genesis's
+easiest target), and pay a host by the period to run it: the order carries
+the genesis, and the host stores it and every block after it, and mines it. Anyone can check
 what each host's blocks did.
 
 Hosts mine every chain they host, all the time, with all their hash rate,
@@ -129,8 +130,8 @@ fund the fees its clients pay with work. `hearth sweep [--float 100]
 to the seller's address, leaving the float, the fees it holds for
 transactions it signed and any fund deposits (the sponsor's
 `lattice-sponsor-holds.json` and `lattice-sponsor-funds.json`). It signs
-with the sponsor's key, so it refuses while the seller or any
-a sponsor on `--sponsor-port` runs, and while a transaction the
+with the sponsor's key, so it refuses while the seller or a
+sponsor on `--sponsor-port` runs, and while a transaction the
 sponsor signed there has yet to land; it says how to pause the seller (its
 service, or the process) without `hearth stop`, which would close the
 offer.
@@ -320,8 +321,10 @@ block:
   the price summed over every chain on its path by each chain's spec;
   renewals add time from where it ends.
 
-Which genesis holds a path is Lattice's to decide (work, and a parent's
-commitment when the buyer makes one), not the market's.
+The market records only what each seller is paid to run. Which genesis
+holds a path is the chains' to decide (its work), not the market's. A buyer
+may also commit the genesis to the parent chain to secure the name; the app
+does not build that commitment yet.
 
 `chain/spec-v3-testnet.json` and `chain/policy-v3.wasm` (this repo's build
 of `policy/src`) make the v3 market, the spec naming the module by its own
@@ -354,8 +357,8 @@ node host/sell-hosting.mjs --node http://10.0.0.5:8090 --token-file seller.token
 
 Of the node's operator API, the seller uses `GET /config`,
 `GET`/`PUT /config/fragments/hostmarket` (`hearth stop` also `DELETE`),
-`POST /pins` and `POST /child-blocks` (with `proofs`: a node that takes a
-genesis's child-only proofs there). It also reads the node's version and sync
+`POST /pins` and `POST /child-blocks` (with `proofs`: node 5.1.0 or
+newer). It also reads the node's version and sync
 (`GET /status`), the market and the chains it hosts (`GET /api/...`),
 submits its writes (`POST /transactions`) and mines (`POST /mining/templates`,
 `POST /mining/work`); a token for all of it is simplest made `admin`
