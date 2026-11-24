@@ -23,7 +23,8 @@ export async function judgeOwn({ sdk, n, m, self, hosted }) {
     const facts = await n.genesis(path).catch(() => undefined);
     if (facts) genesis.set(path, facts);
   }
-  const verdicts = judge({ sdk, height: m.height, versions: m.versions, orders: mine, renewals, genesis });
+  // Every host's orders: a path's contest is judged across hosts (verdict.mjs).
+  const verdicts = judge({ sdk, height: m.height, versions: m.versions, orders: m.orders.filter((o) => hosting(m, o)), renewals, genesis });
   const owed = new Map(), until = new Map();
   for (const o of mine) {
     const v = verdicts.get(o.key);

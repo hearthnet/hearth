@@ -387,7 +387,7 @@ async function viewLaunch(view, _, current) {
     store.set("draft", { name, preset: $("#preset").value, premine: $("#premine").value, periods: $("#periods").value, rules: rules(), modules: custom });
     $("#customRules").hidden = rules() !== "custom";
     $("#moduleList").textContent = Object.keys(custom).length ? `Modules: ${Object.keys(custom).map(short).join(", ")}` : "";
-    const fits = [...m.terms].filter(([k, o]) => standing(m.vouched.get(k.split("/")[0])) && isOpen(m, o) && o.until > m.height + SETTLE
+    const fits = [...m.terms].filter(([k, o]) => standing(m.vouched.get(k.split("/")[0])) && isOpen(m, o) && o.until > m.height + SETTLE + CONTEST
       && s.maxBlockSize <= o.maxBlockSize && s.maxStateGrowth <= o.maxStateGrowth && s.targetBlockTime >= o.minTargetBlockTime
       && s.maxNumberOfTransactionsPerBlock <= o.maxNumberOfTransactionsPerBlock
       && (o.modules === "any" || want.every((c) => o.modules.includes(c))));
@@ -443,7 +443,7 @@ async function viewLaunch(view, _, current) {
       : `<b>${fmt(cost)} ${coinName}</b>: ${offers.map(([k, o]) => `${fmt(chainPrice(o) * periods)} for ${duration(o.period * periods)} at ${esc(hostName(k.split("/")[0]))}`).join(", ")}`;
     // Another buyer's order for this name: still competing (the most paid wins), or it has won.
     const rivals = nameOK ? m.orders.filter((x) => x.path === path && x.buyer !== me?.address).map((x) => verdicts.get(x.key)).filter(Boolean) : [];
-    const won = rivals.some((v) => v.kind === "owed"), contest = rivals.find((v) => v.kind === "pending" && v.reason);
+    const won = rivals.some((v) => v.kind === "owed"), contest = rivals.find((v) => v.kind === "pending");
     const out = { offers, texts: chosen.map((k) => [k, m.offers.get(k)]), path, periods, s: spec(), mods, nameOK };
     const note = $("#launchNote");
     const button = $("#launch");
@@ -468,7 +468,7 @@ async function viewLaunch(view, _, current) {
       }
     }
     else if (won) note.innerHTML = `<div class="notice">${esc(path)} is someone else's app; pick another name.</div>`;
-    else if (contest) note.innerHTML = `<div class="notice">Someone else ordered ${esc(path)} too. Orders for a name compete until market block ${contest.settlesAt - SETTLE}: the app paid the most for gets it, and the others' payments are not refunded.</div>`;
+    else if (contest) note.innerHTML = `<div class="notice">Someone else ordered ${esc(path)} too. Orders for a name compete for ${CONTEST} market blocks from the first: the app paid the most for gets it, and the others' payments are not refunded.</div>`;
     else note.innerHTML = offers.length ? `<p class="small muted">Each host must launch it within about ${duration(SETTLE + CONTEST + 5n)}, and paid time counts from then. If a host fills up or closes before your payment lands, that payment is not refunded: <a href="#/hosts">check a host's record</a> first.</p>` : "";
     if (lastError) note.insertAdjacentHTML("afterbegin", `<div class="notice bad">${esc(lastError)}</div>`);
     button.textContent = lacking && !button.disabled ? "Buy coin and launch" : "Launch";
@@ -526,7 +526,7 @@ async function viewLaunch(view, _, current) {
       const now = soldPerOffer();
       for (const [k, text] of texts) {
         const o = fresh.terms.get(k);
-        const why = !o ? "is gone" : !isOpen(fresh, o) || o.until <= fresh.height + SETTLE ? "has closed"
+        const why = !o ? "is gone" : !isOpen(fresh, o) || o.until <= fresh.height + SETTLE + CONTEST ? "has closed"
           : fresh.offers.get(k) !== text ? "has new terms" : o.capacity <= (now.get(k) ?? 0n) ? "is full" : null;
         // Re-render from the fresh market, so the changed offer is not chosen and sent again.
         if (why) { launchInFlight = false; carriedError = `The offer at ${hostName(k.split("/")[0])} ${why} since you chose it. Check your hosts and launch again.`; route(); return; }

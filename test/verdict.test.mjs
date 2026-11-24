@@ -328,3 +328,15 @@ test("orders for one path compete for CONTEST blocks at any host: the genesis pa
   v = judgeAt([first, sameLate]);
   assert.equal(v.get(sameLate.key).kind, "owed", "the winning genesis can still be ordered at another host");
 });
+
+test("a reader that knows the launched genesis judges the contest as one that does not", () => {
+  const facts = (spec) => ({ specCID: sdk.cidV1DagCbor(sdk.encodeDagCbor(spec)), premineTo: null, transactions: [] });
+  const RICH = { ...SPEC, initialReward: 11n };
+  const x = order({ created: 200n, paid: 50n }), y = order({ buyer: B, created: 205n, paid: 100n, payloadText: payload(RICH) });
+  for (const height of [226n, 228n, 1000n]) {
+    const blind = judge({ sdk, height, versions: offers(), orders: [x, y] });
+    const seeing = judge({ sdk, height, versions: offers(), orders: [x, y], genesis: new Map([["Nexus/testnet/x", facts(RICH)]]) });
+    for (const o of [x, y]) assert.deepEqual([seeing.get(o.key).kind, seeing.get(o.key).until], [blind.get(o.key).kind, blind.get(o.key).until], `${o === x ? "x" : "y"} at ${height}`);
+    assert.deepEqual([blind.get(x.key).kind, blind.get(y.key).kind], ["taken", "owed"]);
+  }
+});

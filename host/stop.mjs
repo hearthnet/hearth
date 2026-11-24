@@ -7,7 +7,7 @@
 // (closing mode, host/sell-hosting.mjs); with no seller, or `--now`, this
 // rewrites the seller's fragment to the paid chains, or deletes it.
 import { reader } from "../client/market.mjs";
-import { CREATED_WINDOW, SETTLE, formatOffer, isClosed, newestOffers, offerKey, parseOffer } from "../client/records.mjs";
+import { CONTEST, CREATED_WINDOW, SETTLE, formatOffer, isClosed, newestOffers, offerKey, parseOffer } from "../client/records.mjs";
 import { recordsBody, submit } from "../client/tx.mjs";
 import { judge } from "../client/verdict.mjs";
 import { ordered } from "./hearth.mjs";
@@ -59,7 +59,7 @@ export function closedAt({ newest, self }) {
  */
 export function closingDone({ live, closed, height, pending, owed }) {
   if (live.length) return { done: false, line: `waiting for the close of ${live.map((o) => o.id).join(", ")} (run hearth stop again if it does not land)` };
-  if (closed !== undefined && height < closed + CREATED_WINDOW + SETTLE) return { done: false, line: `orders settle until market block ${closed + CREATED_WINDOW + SETTLE}` };
+  if (closed !== undefined && height < closed + CREATED_WINDOW + CONTEST + SETTLE) return { done: false, line: `orders settle until market block ${closed + CREATED_WINDOW + CONTEST + SETTLE}` };
   if (pending) return { done: false, line: "orders still settle" };
   if (owed) return { done: false, line: `serving ${owed} paid chains` };
   return { done: true };
@@ -104,7 +104,8 @@ export async function stop({ sdk, node, fetchImpl, rpc, privateKey, market, fee,
   // Orders keyed before the close takes effect are owed; they are judged
   // once settled.
   const closed = closedAt({ newest: newestOffers(m.versions), self });
-  const settledAt = closed === undefined ? m.height : closed + CREATED_WINDOW + SETTLE;
+  // An order keyed just before the close takes effect may open a contest, decided CONTEST blocks later.
+  const settledAt = closed === undefined ? m.height : closed + CREATED_WINDOW + CONTEST + SETTLE;
   if (landed && !now && m.height < settledAt) {
     log(`waiting for market block ${settledAt}: orders placed before the close takes effect (block ${closed + CREATED_WINDOW}) are owed, judged once settled`);
     for (const deadline = Date.now() + patience * Number(settledAt - m.height) * blockTime; m.height < settledAt && Date.now() < deadline;) {
@@ -113,7 +114,7 @@ export async function stop({ sdk, node, fetchImpl, rpc, privateKey, market, fee,
     }
   }
   const orders = m.orders.filter((o) => o.host === self);
-  const verdicts = judge({ sdk, height: m.height, versions: m.versions, orders, renewals: m.renewals.filter((x) => x.host === self) });
+  const verdicts = judge({ sdk, height: m.height, versions: m.versions, orders: m.orders, renewals: m.renewals.filter((x) => x.host === self) });
   const { paid, settling } = paidTime({ orders, verdicts });
 
   // The fragment keeps only chains with paid time (their parents are hosted

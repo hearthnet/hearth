@@ -85,11 +85,6 @@ export function judge({ sdk, height, versions, orders, renewals = [], genesis = 
       if (BigInt(sold.size) >= offer.capacity) { verdicts.set(o.key, { kind: "full", reason: `the offer had sold its ${offer.capacity} chains`, order: o.order }); continue; }
       sold.add(chain);
     }
-    const facts = genesis.get(o.path);
-    if (facts && !sameGenesis(sdk, facts, o.payload)) {
-      verdicts.set(o.key, { kind: "taken", reason: "the path holds a genesis not built from this payload", order: o.order });
-      continue;
-    }
     contestants.has(o.path) ? contestants.get(o.path).push(o) : contestants.set(o.path, [o]);
   }
 
@@ -108,6 +103,12 @@ export function judge({ sdk, height, versions, orders, renewals = [], genesis = 
     for (const o of all) {
       if (o.payloadText !== won) {
         verdicts.set(o.key, { kind: "taken", reason: o.created <= closes ? `outbid: another genesis for ${path} was paid more by market block ${closes}` : `${path} went to another genesis at market block ${closes}`, order: o.order });
+        continue;
+      }
+      // After the contest, so a genesis a reader knows never moves it.
+      const facts = genesis.get(o.path);
+      if (facts && !sameGenesis(sdk, facts, o.payload)) {
+        verdicts.set(o.key, { kind: "taken", reason: "the path holds a genesis not built from this payload", order: o.order });
         continue;
       }
       const chainAt = `${o.host}/${o.id}/${o.path}`;

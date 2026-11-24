@@ -315,12 +315,12 @@ test("`hearth earn` works for the sponsor's payouts until the address holds enou
 });
 
 test("a closing seller is done once nothing is on sale, settling or paid, also when it never wrote a close", () => {
-  const base = { live: [], closed: 600n, height: 626n, pending: false, owed: 0 };
+  const base = { live: [], closed: 600n, height: 636n, pending: false, owed: 0 };  // close + 10 + CONTEST + SETTLE
   assert.deepEqual(closingDone(base), { done: true });
   assert.deepEqual(closingDone({ ...base, closed: undefined, height: 5n }), { done: true }, "its offers ran out, or it had none: nothing to wait for");
   assert.equal(closingDone({ ...base, closed: undefined, owed: 1 }).line, "serving 1 paid chains");
   assert.equal(closingDone({ ...base, closed: undefined, pending: true }).line, "orders still settle");
-  assert.equal(closingDone({ ...base, height: 625n }).line, "orders settle until market block 626");
+  assert.equal(closingDone({ ...base, height: 635n }).line, "orders settle until market block 636");
   assert.match(closingDone({ ...base, live: [{ id: "o" }] }).line, /waiting for the close of o/);
 });
 
@@ -371,4 +371,23 @@ test("sweep leaves the float, the sponsor's holds and fund deposits, and refuses
   assert.deepEqual([done.amount, done.reserve], [1000n - 145n - 1n, 145n]);
   assert.equal(sent.length, 1);
   assert.equal(await sweep({ sdk, node: "http://127.0.0.1:1", fetchImpl: node(4n, 146n), privateKey: key, to: HOST, chain: "M", float: 100n, ...books }), undefined, "nothing above the reserve and fee");
+});
+
+test("a seller judges its orders against every host's: a rival paid more at another host takes the path", async () => {
+  const { judgeOwn } = await import("../host/status.mjs");
+  const sdk = await import("../vendor/lattice-sdk.js");
+  const { formatOffer, formatPayload, offerText, orderKey } = await import("../client/records.mjs");
+  const addr = (n) => sdk.accountFromPrivateKey(new Uint8Array(32).fill(n)).address;
+  const ME = addr(11), OTHER = addr(12), A = addr(13), B = addr(14);
+  const OFFER = { created: 100n, parent: "Nexus/testnet", price: 50n, period: 1440n, until: 100000n, capacity: 5n,
+    maxBlockSize: 100000n, maxStateGrowth: 100000n, minTargetBlockTime: 1000n, maxNumberOfTransactionsPerBlock: 100n, modules: "any" };
+  const SPEC = { maxNumberOfTransactionsPerBlock: 10n, maxStateGrowth: 1000n, maxBlockSize: 1000n, premine: 0n, targetBlockTime: 5000n, initialReward: 10n, halvingInterval: 1000n, halfLife: 100n, wasmPolicies: [] };
+  const pay = (spec) => formatPayload({ spec, premineTo: null, modules: {}, genesisTransactions: [] });
+  const order = (host, buyer, created, paid, payloadText) => ({ key: orderKey({ host, id: "o", payer: buyer, height: created, paid, path: "Nexus/testnet/x" }), host, id: "o", buyer, payer: buyer, created, paid, path: "Nexus/testnet/x", payloadText });
+  const text = offerText(OFFER.created, formatOffer(OFFER));
+  const mine = order(ME, B, 205n, 50n, pay(SPEC)), theirs = order(OTHER, A, 200n, 100n, pay({ ...SPEC, initialReward: 11n }));
+  const m = { height: 1000n, versions: new Map([[`${ME}/o`, [text]], [`${OTHER}/o`, [text]]]), orders: [mine, theirs], renewals: [] };
+  const j = await judgeOwn({ sdk, n: { genesis: async () => undefined }, m, self: ME, hosted: new Set() });
+  assert.equal(j.verdicts.get(mine.key).kind, "taken");
+  assert.equal(j.owed.size, 0, "nothing to launch");
 });
