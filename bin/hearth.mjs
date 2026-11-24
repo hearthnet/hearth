@@ -344,7 +344,9 @@ if (verb === "stop") {
         console.log(`stopped the seller (pid ${pid}), its pacer and its sponsor`);
         // Hearth's node stops with the seller that ran it: this verb runs it now.
         if (node) {
-          try { for (let i = 0; i < 1200; i++) { process.kill(node, 0); await new Promise((r) => setTimeout(r, 250)); } } catch {}
+          // Gone, or a zombie (an init that reaps no orphans leaves one).
+          const alive = () => { try { return !execFileSync("ps", ["-o", "stat=", "-p", String(node)], { encoding: "utf8" }).trim().startsWith("Z"); } catch { return false; } };
+          for (let i = 0; i < 1200 && alive(); i++) await new Promise((r) => setTimeout(r, 250));
           await runManagedNode({ home: homedir(), lattice: a.lattice });
         }
       }
