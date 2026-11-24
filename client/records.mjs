@@ -71,8 +71,10 @@ const OFFER_NUMBERS = new Set(["created", "price", "period", "until", "capacity"
  *                      may end with `blocks mine` or `blocks commit`
  *                      instead; they parse, without it.
  *   sponsor <url>      the host's fee and storage sponsor (lattice-sponsor),
- *                      an https URL (`offer.sponsor`); without the line the
- *                      host runs no public sponsor.
+ *                      an https URL, or a path (`/sponsor`) on the host's
+ *                      url record's origin (`offer.sponsor`, `sponsorAt`),
+ *                      which then moves with the url record, at once;
+ *                      without the line the host runs no public sponsor.
  *   mines <n>          read from old offers only: a claimed mining rate in
  *                      hashes per second (`offer.mines`). Nothing writes it.
  *   whole path         the price is per chain on the ordered path, Nexus
@@ -95,7 +97,7 @@ export function parseOffer(text) {
   }
   if (rest[0]?.startsWith("sponsor ")) {
     optional.sponsor = rest.shift().slice("sponsor ".length);
-    if (!isHTTPS(optional.sponsor)) return undefined;
+    if (!isHTTPS(optional.sponsor) && !isSponsorPath(optional.sponsor)) return undefined;
   }
   if (rest[0]?.startsWith("mines ")) {
     optional.mines = decimal(rest.shift().slice("mines ".length));
@@ -374,6 +376,19 @@ export function parseHostURL(value) {
     if (p.hostname !== new URL(read).hostname || p.pathname !== "/.well-known/lattice.json" || p.search || p.username || p.password) return undefined;
   }
   return { read, proof };
+}
+
+/** A sponsor named by its path on the host's own origin: `/` and no `//`, query, fragment or space. */
+const isSponsorPath = (s) => /^\/(?!\/)[^\s?#]*$/.test(s);
+
+/**
+ * An offer's sponsor as a URL: an https URL as it is; a path on the origin
+ * of the host's url record (`urlValue`), or undefined without one.
+ */
+export function sponsorAt(sponsor, urlValue) {
+  if (sponsor === undefined || !isSponsorPath(sponsor)) return sponsor;
+  const read = parseHostURL(urlValue)?.read;
+  return read && new URL(sponsor, new URL(read).origin).href;
 }
 
 /** A url record's value for a read URL and, if given, where its proof is. */

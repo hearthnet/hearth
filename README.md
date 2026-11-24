@@ -201,8 +201,10 @@ and opens a Cloudflare quick tunnel to it (cloudflared, pinned and checked
 like the node; no account). The seller sells with the tunnel's
 `https://….trycloudflare.com` URL as `--url` and `<url>/sponsor` as
 `--sponsor-url`, so its offers show as *Verified*. The URL changes each time
-it starts and the seller writes the new one, which takes effect 10 market
-blocks later; pages already using the old URL must copy the new one. Quick
+it starts and the seller writes the new one in its url record, which counts
+at once: the offer names its sponsor by its path (`sponsor /sponsor`), on
+whatever origin the url record has, so it needs no new version. Pages that
+pasted the old URL must copy the new one. Quick
 tunnels are Cloudflare's free tier without uptime promises: right for
 testnets and trying Hearth. A host with a domain gives `--url`; `--key-only`
 sells with no URL at all. With a node of your own (`--root`, or one found

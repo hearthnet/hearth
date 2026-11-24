@@ -9,7 +9,7 @@
 import * as sdk from "../vendor/lattice-sdk.js";
 import { reader, holdsVolume } from "../client/market.mjs";
 import { judge, judgeStorage, sameGenesis } from "../client/verdict.mjs";
-import { parseOffer, parseOrderKey, parsePayload, parseStorageOffer, parseHostURL, offerAt, isClosed, moduleCID, isAddress, SETTLE, burnAddress, pathFromNexus, pathPrice } from "../client/records.mjs";
+import { parseOffer, parseOrderKey, parsePayload, parseStorageOffer, parseHostURL, sponsorAt, offerAt, isClosed, moduleCID, isAddress, SETTLE, burnAddress, pathFromNexus, pathPrice } from "../client/records.mjs";
 import { checkListed, checkServing, sponsorURL as askable } from "../client/service.mjs";
 import { snippet } from "./snippet.mjs";
 import { uniqueNodes, nodesNow, chooseAnchor, disagreeMessage, blocksTime, CHECKPOINT_AFTER, WALK } from "./anchor.mjs";
@@ -154,6 +154,8 @@ async function loadMarket(force = false) {
     // Each offer's terms: the version in force at the tip (market.mjs), the
     // one an order placed now goes by. A newer version shows once in force.
     m.terms = new Map([...m.offers].map(([k, t]) => [k, parseOffer(t)]).filter(([, o]) => o));
+    // A sponsor named by its path is on the host's url record's origin, as it is now.
+    for (const [k, o] of m.terms) if (o.sponsor !== undefined) o.sponsor = sponsorAt(o.sponsor, m.urlValues.get(k.split("/")[0]));
     m.storage = new Map([...m.offers].map(([k, t]) => [k, parseStorageOffer(t)]).filter(([, o]) => o));
     // Storage orders apart: every other view is about chains.
     m.storageOrders = m.orders.filter((o) => m.storage.has(`${o.host}/${o.id}`));

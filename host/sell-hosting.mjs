@@ -211,6 +211,10 @@ current = currentOffer({ self, id: offerId, file: offerFile });
 const storageFile = args["storage-offer"] ? JSON.parse(readFileSync(args["storage-offer"], "utf8")) : undefined;
 if (storageFile && (!storageFile.id || storageFile.id === offerId)) throw new Error("the storage offer needs an id of its own, not the hosting offer's");
 const urlValue = args.url && formatHostURL(args.url, args.proof);
+// A sponsor on the --url's own origin is offered by its path: it moves with
+// the url record (written at once), and a new URL (a quick tunnel's, each
+// start) needs no new offer version.
+const offerSponsor = sponsorURL && args.url && new URL(sponsorURL).origin === new URL(args.url).origin ? new URL(sponsorURL).pathname : sponsorURL;
 if (urlValue && !parseHostURL(urlValue)) throw new Error("--proof must be an https URL on --url's hostname");
 if (offerFile) log(`offer ${offerId}: ${growthLine({ ...offerFile, capacity: offerFile.capacity ?? 1 })}`);
 
@@ -265,13 +269,13 @@ async function nextVersion(m, newest) {
     if (line !== saidOff) log((saidOff = line));
     return undefined;
   } else {
-    if (was.blocks === sponsorAddress && was.sponsor === sponsorURL && was.wholePath) return undefined;
+    if (was.blocks === sponsorAddress && was.sponsor === offerSponsor && was.wholePath) return undefined;
     offer = { ...was, created: m.height };
     delete offer.mines;
   }
   offer.blocks = sponsorAddress;
   offer.wholePath = true;   // an offer from before 2.1 gets a version priced per chain on the path
-  if (sponsorURL) offer.sponsor = sponsorURL; else delete offer.sponsor;
+  if (offerSponsor) offer.sponsor = offerSponsor; else delete offer.sponsor;
   if (!parseOffer(offerText(offer.created, formatOffer(offer)))) throw new Error("the offer file does not make a valid offer");
   tell(offer, m.height, spec.targetBlockTime);
   return offer;

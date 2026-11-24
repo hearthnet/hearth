@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as sdk from "../vendor/lattice-sdk.js";
-import { CREATED_WINDOW, formatOffer, formatPayload, inForce, isClosed, moduleCID, newestOffers, offerAt, offerText, orderKey, parseOffer, parsePayload, strictJSON, SETTLE } from "../client/records.mjs";
+import { CREATED_WINDOW, formatOffer, formatPayload, inForce, isClosed, moduleCID, newestOffers, offerAt, offerText, orderKey, parseOffer, parsePayload, sponsorAt, strictJSON, SETTLE } from "../client/records.mjs";
 import { judge, sameGenesis } from "../client/verdict.mjs";
 
 const key = (n) => sdk.accountFromPrivateKey(new Uint8Array(32).fill(n)).address;
@@ -279,4 +279,16 @@ test("whole path: an order pays the price for each chain on its path, Nexus incl
   const w = orderWrite({ host: HOST, id: "o", offer: WHOLE, buyer: A, path: "Nexus/testnet/x", payload: { spec: SPEC, premineTo: null, modules: {}, genesisTransactions: [] }, periods: 2n, height: 500n });
   assert.equal(w.payments[0].amount, 300n);
   assert.equal(renewWrite({ host: HOST, id: "o", offer: WHOLE, payer: A, path: "Nexus/testnet/x", periods: 1n, height: 500n }).payments[0].amount, 150n);
+});
+
+test("an offer's sponsor by its path is on the host's url record's origin, as the record is now", () => {
+  const text = (sponsor) => version({ sponsor });
+  assert.equal(parseOffer(text("/sponsor")).sponsor, "/sponsor");
+  assert.equal(parseOffer(text("https://host.example/sponsor")).sponsor, "https://host.example/sponsor");
+  for (const bad of ["//evil.example/sponsor", "sponsor", "/sponsor?x=1", "/spon sor", "http://host.example/sponsor"]) assert.equal(parseOffer(text(bad)), undefined, bad);
+  assert.equal(sponsorAt("/sponsor", "https://a-b.trycloudflare.com"), "https://a-b.trycloudflare.com/sponsor");
+  assert.equal(sponsorAt("/sponsor", "https://host.example/read/\nproof https://host.example/.well-known/lattice.json"), "https://host.example/sponsor", "the origin, not the read path");
+  assert.equal(sponsorAt("/sponsor", undefined), undefined, "no url record: no sponsor");
+  assert.equal(sponsorAt("https://other.example/s", "https://host.example"), "https://other.example/s");
+  assert.equal(sponsorAt(undefined, "https://host.example"), undefined);
 });
