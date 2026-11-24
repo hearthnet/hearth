@@ -1,7 +1,7 @@
-// `hearth sell --public`: a seller with no domain of its own still serves
-// buyers. One local proxy puts the node's public read port, the sponsor and
-// the proof that the domain speaks for the seller behind one origin, and a
-// Cloudflare quick tunnel (no account) gives that origin an https URL.
+// `hearth sell --public`: a seller with no domain of its own is still
+// reachable. One local proxy puts the node's public read port and the
+// sponsor behind one origin, and a Cloudflare quick tunnel (no account)
+// gives that origin an https URL.
 
 import { spawn } from "node:child_process";
 import { createServer, request } from "node:http";
@@ -13,19 +13,13 @@ const HOP = new Set(["connection", "keep-alive", "te", "trailer", "transfer-enco
 export const PUBLIC_READ_PORT = 8082;
 
 /**
- * A proxy on 127.0.0.1 (`port`, 0 for any): `/.well-known/lattice.json`
- * lists `seller` (client/vouch.mjs reads it), `/sponsor/…` goes to the
+ * A proxy on 127.0.0.1 (`port`, 0 for any): `/sponsor/…` goes to the
  * sponsor on `sponsorPort` without the prefix, anything else to the node's
  * public read port. Resolves to `{ port, close }` once it listens.
  */
-export function startProxy({ port = 0, nodePort, sponsorPort, seller }) {
-  const proof = JSON.stringify({ sellers: [seller] });
+export function startProxy({ port = 0, nodePort, sponsorPort }) {
   const server = createServer((req, res) => {
     const path = req.url ?? "/";
-    if (path.split("?")[0] === "/.well-known/lattice.json") {
-      res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" });
-      return res.end(proof);
-    }
     const sponsor = path === "/sponsor" || path.startsWith("/sponsor/") || path.startsWith("/sponsor?");
     const to = sponsor ? sponsorPort : nodePort;
     const rest = sponsor ? path.slice("/sponsor".length) : path;

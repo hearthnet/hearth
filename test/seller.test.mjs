@@ -1,18 +1,14 @@
-// What a seller runs beside its node: the pacer that makes its chains'
-// blocks, the checks buyers run on those blocks, the node gates, `hearth
-// stop`'s close, and `hearth earn`.
+// The seller's parts, each against a fake node: the miner, launching an
+// owed chain, the node's gates, earning, reopening and sweeping.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { test } from "node:test";
 import * as sdk from "../vendor/lattice-sdk.js";
-import { formatOffer, isClosed, offerText, orderKey, formatPayload, parseOffer } from "../client/records.mjs";
-import { judge } from "../client/verdict.mjs";
-import { CLOCK_SLACK_MS, checkListed, checkServing, listed, live, servingWindow, serving } from "../client/service.mjs";
-import { DEFAULT_MARKET, markClosing, markReopen, nodeVersion, sellerFiles, sponsorBooks, startsReopened, sweep, sweepReserve, syncProgress } from "../host/hearth.mjs";
-import { exclusions, pacer } from "../host/pace.mjs";
-import { closedAt, closingActions, closingDone, paidTime } from "../host/stop.mjs";
-import { policyCID, SPEC as SPEC_FILE } from "./market-chain.mjs";
+import { moduleCID } from "../client/records.mjs";
+import { DEFAULT_MARKET, markClosing, markReopen, nodeVersion, sellerChains, sellerFiles, sponsorBooks, startsReopened, sweep, sweepReserve, syncProgress } from "../host/hearth.mjs";
+import { miner } from "../host/pace.mjs";
+import { launch } from "../host/launch.mjs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,208 +28,83 @@ const listen = async (handler) => {
 };
 const json = (res, body, status = 200, headers = {}) => res.writeHead(status, { "Content-Type": "application/json", ...headers }).end(JSON.stringify(body));
 
-/**
- * A node whose template carries `chains` (`{ path: { blockTime, target,
- * fresh, syncing } }`): a submitted nonce makes a block, now, on every chain
- * whose target its hash clears. A `fresh` chain's tip is always new, as when
- * other miners keep it moving; a `syncing` one is behind its best header.
- */
-// A node hosting `chains` (and Nexus, Nexus/testnet). `old` ignores a
-// template's `exclude`, as a node from before it does; `listsLate` names a
-// chain its first `GET /config` does not list yet.
-async function miningNode(chains, { old = false, listsLate } = {}) {
-  const blocks = Object.fromEntries(Object.keys(chains).map((p) => [p, []]));
-  const templates = new Map(), requests = [];
-  const hosted = ["Nexus", "Nexus/testnet", ...Object.keys(chains)];
-  let n = 0, configs = 0;
+test("the miner mines every chain the node hosts, every level paying the sponsor's address, and takes a fresh template after each hit", async () => {
+  const hosted = ["Nexus/testnet", "Nexus/testnet/hearth", "Nexus/testnet/app"];
+  const requests = [], work = [];
+  let n = 0;
   const node = await listen((req, res, body) => {
-    const url = new URL(req.url, "http://x"), path = url.searchParams.get("chainPath");
-    if (url.pathname === "/config") {
-      const listed = hosted.filter((p) => configs > 0 || p !== listsLate);
-      configs++;
-      return json(res, { status: { chains: listed.map((p) => ({ path: p, from: ["deploy"], actual: "hosted" })) } });
-    }
-    if (url.pathname === "/status") return json(res, { height: "5", bestHeaderHeight: chains[path].syncing ? "9" : "5" });
-    if (url.pathname === "/api/chain/spec") return json(res, { targetBlockTime: String(chains[path].blockTime) });
-    if (url.pathname === "/api/blocks") {
-      const tip = chains[path].fresh ? { timestamp: String(Date.now()) } : blocks[path].at(-1);
-      return json(res, { blocks: tip ? [tip] : [] });
-    }
+    const url = new URL(req.url, "http://x");
+    if (url.pathname === "/config") return json(res, { status: { chains: [...hosted.map((path) => ({ path, actual: "hosted" })), { path: "Nexus/testnet/gone", actual: "stopped" }] } });
     if (url.pathname === "/mining/templates") {
-      const request = JSON.parse(body);
-      requests.push(request);
-      const out = new Set(old ? [] : (request.exclude ?? []).map((x) => x.join("/")));
-      if (hosted.some((p) => !out.has(p) && [...out].some((x) => p.startsWith(`${x}/`)))) return json(res, { error: "excludedAncestor" }, 400);
-      const carried = Object.keys(chains).filter((p) => !out.has(p));
-      const workID = `w${n++}`, prefixHex = createHash("sha256").update(workID).digest("hex");
-      templates.set(workID, { prefixHex, carried });
-      return json(res, { workID, prefixHex, searchTarget: `0x${MAX.toString(16)}`,
-        chains: carried.map((p) => ({ chainPath: p.split("/"), target: `0x${chains[p].target.toString(16)}`, height: String(blocks[p].length) })) });
+      requests.push(JSON.parse(body));
+      const workID = `w${n++}`;
+      return json(res, { workID, prefixHex: createHash("sha256").update(workID).digest("hex"), searchTarget: `0x${MAX.toString(16)}`,
+        chains: hosted.map((p) => ({ chainPath: p.split("/"), target: `0x${(p.endsWith("app") ? MAX : 0n).toString(16)}`, height: "3" })) });
     }
-    if (url.pathname === "/mining/work") {
-      const { workID, nonce } = JSON.parse(body), be = Buffer.alloc(8);
-      be.writeBigUInt64BE(BigInt(nonce));
-      const { prefixHex, carried } = templates.get(workID);
-      const hash = BigInt(`0x${createHash("sha256").update(Buffer.from(prefixHex, "hex")).update(be).digest("hex")}`);
-      const recipient = requests.at(-1)?.recipients?.[0]?.address;
-      // One hit, one timestamp: the blocks it makes are found together.
-      const at = String(Date.now());
-      for (const p of carried) if (hash <= chains[p].target) blocks[p].push({ timestamp: at, rewardRecipient: recipient });
-      return json(res, { disposition: "childOnly" });
-    }
+    if (url.pathname === "/mining/work") { work.push(JSON.parse(body)); return json(res, { disposition: "childOnly" }); }
     json(res, {}, 404);
   });
-  return { ...node, blocks, requests };
-}
-
-const TERMS = { parent: "Nexus/testnet", price: 50n, period: 100n, capacity: 5n, maxBlockSize: 100000n, maxStateGrowth: 100000n,
-  minTargetBlockTime: 1000n, maxNumberOfTransactionsPerBlock: 100n, modules: "any", blocks: PAYS };
-const at = (created, o) => offerText(created, formatOffer({ ...TERMS, ...o }));
-
-test("the pacer makes each chain's block once its tip is a target block time old, paid to the sponsor's address", async () => {
-  const A = "Nexus/testnet/a", B = "Nexus/testnet/b", C = "Nexus/testnet/c", D = "Nexus/testnet/d";
-  // A round for one chain excludes the rest, so none takes a block early.
-  const node = await miningNode({ [A]: { blockTime: 200, target: MAX }, [B]: { blockTime: 600, target: MAX >> 4n }, [C]: { blockTime: 200, target: MAX >> 40n, fresh: true },
-    [D]: { blockTime: 200, target: MAX, syncing: true } });
   const lines = [];
-  const began = Date.now();
-  const p = pacer({ rpc: node.url, fetchImpl: (...x) => fetch(...x), to: PAYS, chains: () => [A, B, C, D], log: (l) => lines.push(l), idle: 20 });
-  await new Promise((r) => setTimeout(r, 2000));
-  p.stop();
-  await p.done;
+  const m = miner({ rpc: node.url, fetchImpl: (...x) => fetch(...x), to: PAYS, log: (l) => lines.push(l), batch: 1000n, idle: 20 });
+  while (work.length < 3) await new Promise((r) => setTimeout(r, 10));
+  m.stop();
+  await m.done;
   node.close();
-  // Bounds from the time it actually ran: a loaded machine runs fewer rounds, never more.
-  const elapsed = Date.now() - began;
-  const gaps = (bs) => bs.slice(1).map((b, i) => Number(b.timestamp) - Number(bs[i].timestamp));
-  assert.ok(node.blocks[B].length >= 1 && node.blocks[B].length <= Math.floor(elapsed / 600) + 1, `B: ${node.blocks[B].length} blocks in ${elapsed} ms at 600 ms`);
-  assert.ok(node.blocks[A].length >= 2 && node.blocks[A].length <= Math.floor(elapsed / 200) + 1, `A: ${node.blocks[A].length} blocks in ${elapsed} ms at 200 ms`);
-  assert.ok(gaps(node.blocks[B]).every((g) => g >= 600), `B: ${gaps(node.blocks[B])}`);
-  assert.ok(gaps(node.blocks[A]).every((g) => g >= 200), `A, easier, is excluded from B's rounds: ${gaps(node.blocks[A])}`);
-  assert.equal(node.blocks[C].length, 0, "a chain others keep moving gets no block");
-  assert.equal(node.blocks[D].length, 0, "a chain the node is syncing gets no block");
-  assert.ok(lines.some((l) => l.startsWith(`pacer: ${D} is syncing`)), lines.join("\n"));
-  assert.ok([...node.blocks[A], ...node.blocks[B]].every((b) => b.rewardRecipient === PAYS));
-  assert.deepEqual(node.requests[0].recipients.map((r) => r.chainPath.join("/")), ["Nexus", "Nexus/testnet", A, B, C, D], "every level of every paced chain pays the sponsor");
-  assert.ok(node.requests.every((r) => [C, D].every((x) => r.exclude?.some((e) => e.join("/") === x))), "each round excludes the chains not due");
-  assert.ok(lines.some((l) => l.startsWith(`paced ${A}@`)), lines.join("\n"));
+  assert.deepEqual(requests[0].recipients, ["Nexus", ...hosted].map((p) => ({ chainPath: p.split("/"), address: PAYS })), "Nexus and every hosted chain, none stopped");
+  assert.deepEqual(work.slice(0, 3).map((w) => w.workID), ["w0", "w1", "w2"], "one hit a template");
+  assert.ok(lines.includes("mined Nexus/testnet/app@3: childOnly"), lines.join("\n"));
+  assert.equal(m.rate(), 0, "no rate before its first minute");
 });
 
-test("exclude: every hosted chain not due and with none due below it, so a due chain keeps its ancestors", () => {
-  const hosted = ["Nexus", "Nexus/testnet", "Nexus/testnet/hosts", "Nexus/testnet/app", "Nexus/testnet/app/sub", "Nexus/testnet/other", "Nexus/testnet/other/sub"];
-  assert.deepEqual(exclusions({ hosted, due: ["Nexus/testnet/app/sub"] }), ["Nexus/testnet/hosts", "Nexus/testnet/other", "Nexus/testnet/other/sub"]);
-  assert.deepEqual(exclusions({ hosted, due: ["Nexus/testnet/hosts", "Nexus/testnet/app"] }), ["Nexus/testnet/app/sub", "Nexus/testnet/other", "Nexus/testnet/other/sub"]);
-  assert.deepEqual(exclusions({ hosted, due: ["Nexus/testnet"] }), ["Nexus/testnet/app", "Nexus/testnet/app/sub", "Nexus/testnet/hosts", "Nexus/testnet/other", "Nexus/testnet/other/sub"]);
-});
-
-test("a due chain's easier ancestor still gets the block its hash clears", async () => {
-  const P = "Nexus/testnet/p", Q = "Nexus/testnet/p/q";
-  const node = await miningNode({ [P]: { blockTime: 60_000, target: MAX }, [Q]: { blockTime: 300, target: MAX >> 2n } });
-  const p = pacer({ rpc: node.url, fetchImpl: (...x) => fetch(...x), to: PAYS, chains: () => [P, Q], log: () => {}, idle: 20 });
-  await new Promise((r) => setTimeout(r, 1000));
-  p.stop();
-  await p.done;
-  node.close();
-  assert.ok(node.blocks[Q].length >= 2, `Q: ${node.blocks[Q].length}`);
-  assert.ok(node.requests.every((r) => !r.exclude), "P, Q's parent, is never excluded");
-  const withP = new Set(node.blocks[P].map((b) => b.timestamp));
-  assert.ok(node.blocks[Q].every((b) => withP.has(b.timestamp)), "each hash for Q makes P's block too");
-});
-
-test("a node without exclude: the pacer skips hashes that would clear a harder chain not due", async () => {
-  const A = "Nexus/testnet/a", B = "Nexus/testnet/b";
-  const node = await miningNode({ [A]: { blockTime: 200, target: MAX }, [B]: { blockTime: 600, target: MAX >> 4n } }, { old: true });
-  const p = pacer({ rpc: node.url, fetchImpl: (...x) => fetch(...x), to: PAYS, chains: () => [A, B], log: () => {}, idle: 20 });
-  await new Promise((r) => setTimeout(r, 2000));
-  p.stop();
-  await p.done;
-  node.close();
-  const gaps = (bs) => bs.slice(1).map((b, i) => Number(b.timestamp) - Number(bs[i].timestamp));
-  assert.ok(node.blocks[A].length >= 2 && node.blocks[B].length >= 1);
-  assert.ok(gaps(node.blocks[B]).every((g) => g >= 600), `B, harder, is skipped by A's rounds (which would clear it one time in 16): ${gaps(node.blocks[B])}`);
-  // A, easier, cannot be skipped: a hash for B clears it too.
-  const withB = new Set(node.blocks[B].map((b) => b.timestamp));
-  assert.ok(node.blocks[A].slice(1).every((b, i) => Number(b.timestamp) - Number(node.blocks[A][i].timestamp) >= 200 || withB.has(b.timestamp)), `A: ${gaps(node.blocks[A])}`);
-});
-
-test("refused with excludedAncestor (a chain newly hosted under an excluded one), the pacer reads the hosted chains again and retries once", async () => {
-  const A = "Nexus/testnet/a", P = "Nexus/testnet/p", X = "Nexus/testnet/p/x";
-  const node = await miningNode({ [A]: { blockTime: 60_000, target: MAX }, [P]: { blockTime: 200, target: MAX, fresh: true }, [X]: { blockTime: 200, target: MAX, fresh: true } }, { listsLate: X });
+test("with no chain in its template yet, the miner says so and waits", async () => {
+  const node = await listen((req, res) => {
+    const url = new URL(req.url, "http://x");
+    if (url.pathname === "/config") return json(res, { status: { chains: [] } });
+    if (url.pathname === "/mining/templates") return json(res, { workID: "w", prefixHex: "00", searchTarget: "0x0", chains: [] });
+    json(res, {}, 404);
+  });
   const lines = [];
-  const p = pacer({ rpc: node.url, fetchImpl: (...x) => fetch(...x), to: PAYS, chains: () => [A], log: (l) => lines.push(l), idle: 20 });
-  await new Promise((r) => setTimeout(r, 500));
-  p.stop();
-  await p.done;
+  const m = miner({ rpc: node.url, fetchImpl: (...x) => fetch(...x), to: PAYS, log: (l) => lines.push(l), idle: 20 });
+  await new Promise((r) => setTimeout(r, 200));
+  m.stop();
+  await m.done;
   node.close();
-  assert.deepEqual(node.requests.slice(0, 2).map((r) => r.exclude.map((x) => x.join("/"))), [[P], [P, X]]);
-  assert.equal(node.blocks[A].length, 1, lines.join("\n"));
-  assert.equal(node.blocks[P].length + node.blocks[X].length, 0);
+  assert.deepEqual(lines, ["miner: the node's template carries no chain yet"], "said once");
 });
 
-test("after a miss, the pacer waits the chain's whole target block time", async () => {
-  const E = "Nexus/testnet/e";
-  const node = await miningNode({ [E]: { blockTime: 500, target: 0n } });
-  const lines = [];
-  const began = Date.now();
-  const p = pacer({ rpc: node.url, fetchImpl: (...x) => fetch(...x), to: PAYS, chains: () => [E], log: (l) => lines.push(l), idle: 20, maxHashes: 1000n });
-  await new Promise((r) => setTimeout(r, 1800));
-  p.stop();
-  await p.done;
-  node.close();
-  const elapsed = Date.now() - began;
-  assert.ok(node.requests.length >= 2 && node.requests.length <= Math.floor(elapsed / 500) + 1, `${node.requests.length} templates in ${elapsed} ms at 500 ms`);
-  assert.ok(lines.some((l) => /no hit for .* in 1000 hashes/.test(l)), lines.join("\n"));
+const fixture = JSON.parse(readFileSync(new URL("./fixtures/genesis-testnet-hearth.json", import.meta.url), "utf8"));
+const MODULE = readFileSync(new URL("../chain/policy-v3.wasm", import.meta.url)).toString("base64");
+
+test("launch: pins every Volume and module of the genesis, then submits the genesis block with its proofs until the node weighs it", async () => {
+  const calls = [];
+  const rpc = (status) => async (route, body) => { calls.push([route, body]); return { body: route === "/child-blocks" ? { blockCID: fixture.genesis, status } : { pins: [] } }; };
+  const extra = Buffer.from("not wasm").toString("base64");
+  const genesis = { cid: fixture.genesis, volumes: fixture.volumes, modules: { [moduleCID(sdk, MODULE)]: MODULE, [moduleCID(sdk, extra)]: extra }, proofs: ["AAAA", "BBBB"] };
+  assert.equal(await launch({ rpc: rpc("tree"), path: "Nexus/testnet/app", genesis }), "tree");
+  const pins = calls.filter(([r]) => r === "/pins").map(([, b]) => b);
+  assert.deepEqual(pins.map((p) => p.cid), [...Object.keys(fixture.volumes), moduleCID(sdk, extra)], "each Volume, and each module no Volume holds");
+  for (const p of pins.slice(0, -1)) {
+    const volume = sdk.decodeVolumeArchive(p.cid, Buffer.from(fixture.volumes[p.cid], "base64"));
+    assert.deepEqual(Object.keys(p.entries).sort(), volume.entries.map((e) => e.cid).sort(), "every entry of the Volume, by CID");
+  }
+  assert.equal(moduleCID(sdk, extra), sdk.cidV1DagCbor(Buffer.from(Object.values(pins.at(-1).entries)[0], "base64")), "a module's entry is its node, which its CID names");
+  const [route, submit] = calls.at(-1);
+  assert.equal(route, "/child-blocks", "the block after its content");
+  assert.deepEqual(submit.chainPath, ["Nexus", "testnet", "app"]);
+  assert.deepEqual(submit.proofs, ["AAAA", "BBBB"]);
+  const block = sdk.decodeCanonicalBlock(Buffer.from(submit.block, "base64"));
+  assert.equal(sdk.cidV1DagCbor(Buffer.from(submit.block, "base64")), fixture.genesis, "the genesis block's own bytes");
+  assert.equal(sdk.cidV1DagCbor(Buffer.from(submit.children, "base64")), block.childrenCID);
+  assert.equal(sdk.cidV1DagCbor(Buffer.from(submit.spec, "base64")), block.specCID);
+  assert.equal(await launch({ rpc: rpc("awaiting"), path: "Nexus/testnet/app", genesis }), "awaiting", "not weighed yet: the seller tries again next pass");
+  const { [fixture.genesis]: _, ...noBlock } = fixture.volumes;
+  await assert.rejects(launch({ rpc: rpc("tree"), path: "Nexus/testnet/app", genesis: { ...genesis, volumes: noBlock } }), /carries no block/);
 });
 
-test("listed: the offer is open and its sponsor's terms bind it to this host", async () => {
-  const offer = { ...TERMS, created: 100n, until: 5000n, sponsor: "https://host.example/sponsor" };
-  const terms = { address: PAYS, payTo: HOST };
-  assert.deepEqual(listed({ offer, terms, host: HOST, height: 200n }), { ok: true });
-  assert.deepEqual(listed({ offer, terms: { fundTo: PAYS, payTo: HOST }, host: HOST, height: 200n }), { ok: true }, "fundTo, from a sponsor before `address`");
-  assert.equal(listed({ offer, terms: { address: OTHER, fundTo: PAYS, payTo: HOST }, host: HOST, height: 200n }).ok, false, "`address` first");
-  assert.equal(listed({ offer: { ...offer, sponsor: "http://host.example/sponsor" }, terms, host: HOST, height: 200n }).reason, "its sponsor is not an https URL");
-  assert.deepEqual(listed({ offer: { ...offer, sponsor: "http://127.0.0.1:8650" }, terms, host: HOST, height: 200n }), { ok: true }, "a sponsor on loopback");
-  assert.deepEqual(listed({ offer, terms, host: HOST, height: 5000n }), { ok: false, reason: "the offer is not open" });
-  assert.deepEqual(listed({ offer: { ...offer, until: 100n }, terms, host: HOST, height: 200n }).reason, "the offer is not open", "closed");
-  assert.equal(listed({ offer: { ...offer, sponsor: undefined }, terms, host: HOST, height: 200n }).reason, "the offer names no sponsor");
-  assert.equal(listed({ offer: { ...offer, blocks: undefined }, terms, host: HOST, height: 200n }).reason, "the offer names no address its blocks pay");
-  assert.equal(listed({ offer, terms: undefined, host: HOST, height: 200n }).reason, "its sponsor does not answer");
-  assert.equal(listed({ offer, terms: { ...terms, address: OTHER }, host: HOST, height: 200n }).reason, "its sponsor's address is not the one its blocks pay", "another host's sponsor");
-  assert.equal(listed({ offer, terms: { ...terms, payTo: OTHER }, host: HOST, height: 200n }).reason, "its sponsor does not pay this host");
-  const asked = [];
-  const fetchImpl = async (url, init) => { asked.push([url, !!init.signal]); return new Response(JSON.stringify(terms)); };
-  assert.deepEqual(await checkListed({ offer, host: HOST, height: 200n, fetchImpl }), { ok: true });
-  assert.deepEqual(asked, [["https://host.example/sponsor/terms", true]], "GET /terms, with a timeout");
-  assert.equal((await checkListed({ offer, host: HOST, height: 200n, fetchImpl: async () => { throw new Error("refused"); } })).reason, "its sponsor does not answer");
-  asked.length = 0;
-  assert.equal((await checkListed({ offer: { ...offer, sponsor: "http://host.example" }, host: HOST, height: 200n, fetchImpl })).ok, false);
-  assert.deepEqual(asked, [], "never asks a plain-http sponsor");
-});
-
-test("serving: the host's address credited on the chain within max(24 h, 10 T); live: any block within 3 T; both with clock slack", async () => {
-  const offer = { blocks: PAYS };
-  const now = 10_000_000_000, day = 24 * 3600 * 1000;
-  assert.equal(servingWindow(5000), day);
-  assert.equal(servingWindow(3 * 3600 * 1000), 30 * 3600 * 1000, "ten blocks of a slow chain");
-  assert.deepEqual(serving({ blocks: [{ rewardRecipient: PAYS, timestamp: now - day }], offer, targetBlockTime: 5000, now }), { ok: true });
-  assert.deepEqual(serving({ blocks: [{ rewardRecipient: PAYS, timestamp: now - day - CLOCK_SLACK_MS + 1 }], offer, targetBlockTime: 5000, now }), { ok: true }, "within the slack");
-  assert.equal(serving({ blocks: [{ rewardRecipient: PAYS, timestamp: now - day - CLOCK_SLACK_MS }, { rewardRecipient: OTHER, timestamp: now }], offer, targetBlockTime: 5000, now }).ok, false);
-  assert.equal(serving({ blocks: [{ rewardRecipient: PAYS, timestamp: now }], offer: {}, targetBlockTime: 5000, now }).reason, "the offer names no address its blocks pay");
-  assert.deepEqual(live({ blocks: [{ rewardRecipient: OTHER, timestamp: now - 15000 - CLOCK_SLACK_MS + 1 }], targetBlockTime: 5000, now }), { ok: true }, "from anyone");
-  assert.equal(live({ blocks: [{ timestamp: now - 15000 - CLOCK_SLACK_MS }], targetBlockTime: 5000, now }).ok, false);
-  // Bounded, and it stops at the host's first block.
-  const asked = [];
-  const reader = { recentBlocks: async (chain, bounds) => { asked.push([chain, bounds]); return [{ rewardRecipient: PAYS, timestamp: now }]; } };
-  assert.deepEqual(await checkServing({ reader, chain: "M/app", offer, targetBlockTime: 5000, now }), { ok: true, live: { ok: true } });
-  assert.deepEqual(asked.map(([c, b]) => [c, b.since, b.max]), [["M/app", now - day - CLOCK_SLACK_MS, 1000]]);
-  assert.equal(asked[0][1].stop({ rewardRecipient: PAYS }), true);
-  assert.equal(asked[0][1].stop({ rewardRecipient: OTHER }), false);
-  // A read that hit its cap before the window's start has no verdict.
-  const capped = Object.assign([{ rewardRecipient: OTHER, timestamp: now }], { complete: false });
-  assert.deepEqual(serving({ blocks: capped, offer, targetBlockTime: 5000, now, complete: false }), { ok: false, reason: "unknown" });
-  const cappedReader = { recentBlocks: async () => capped };
-  assert.deepEqual(await checkServing({ reader: cappedReader, chain: "M/app", offer, targetBlockTime: 5000, now }), { ok: false, reason: "unknown", live: { ok: true } });
-  const whole = Object.assign([{ rewardRecipient: OTHER, timestamp: now }], { complete: true });
-  assert.equal((await checkServing({ reader: { recentBlocks: async () => whole }, chain: "M/app", offer, targetBlockTime: 5000, now })).reason, "no block of this chain pays the host lately");
+test("the fragment lists the market and every owed chain, each with the chains above it, never Nexus", () => {
+  assert.deepEqual(sellerChains({ market: DEFAULT_MARKET }), ["Nexus/testnet", DEFAULT_MARKET]);
+  assert.deepEqual(sellerChains({ market: DEFAULT_MARKET, owed: ["Nexus/other/deep/app", "Nexus/b", "Nexus/testnet/a"] }),
+    ["Nexus/b", "Nexus/other", "Nexus/testnet", "Nexus/other/deep", "Nexus/testnet/a", DEFAULT_MARKET, "Nexus/other/deep/app"], "any path, its ancestors first");
 });
 
 test("the node gates: GET /config says which layer lists each chain (Lattice 4.0.1), and a chain counts as synced once its tip is at the best header its peers showed", async () => {
@@ -250,43 +121,19 @@ test("the node gates: GET /config says which layer lists each chain (Lattice 4.0
   assert.equal(syncProgress({ height: "0" }).synced, false);
 });
 
-test("chain/spec.json names chain/policy.wasm by its own CID, the module the market (chain/market.json) runs", () => {
-  const spec = JSON.parse(readFileSync(SPEC_FILE, "utf8"));
-  assert.deepEqual(spec.wasmPolicies.map((p) => p.moduleCID), [policyCID()]);
-  const market = JSON.parse(readFileSync(new URL("../chain/market.json", import.meta.url), "utf8"));
+test("chain/spec.json names chain/policy.wasm by its own CID, the module the old market (chain/market.json) runs", () => {
+  const spec = JSON.parse(readFileSync(new URL("../chain/spec.json", import.meta.url), "utf8"));
+  const cid = moduleCID(sdk, readFileSync(new URL("../chain/policy.wasm", import.meta.url)).toString("base64"));
+  assert.deepEqual(spec.wasmPolicies.map((p) => p.moduleCID), [cid]);
+  assert.equal(JSON.parse(readFileSync(new URL("../chain/market.json", import.meta.url), "utf8")).moduleCID, cid);
+});
+
+test("the default market is the v3 market on testnet, whose spec names chain/policy-v3.wasm by its own CID", () => {
+  const market = JSON.parse(readFileSync(new URL("../chain/market-v3-testnet.json", import.meta.url), "utf8"));
+  const spec = JSON.parse(readFileSync(new URL("../chain/spec-v3-testnet.json", import.meta.url), "utf8"));
   assert.equal(market.path, DEFAULT_MARKET);
-  assert.equal(market.moduleCID, policyCID(), "the market runs this build of policy/src");
-});
-
-
-test("`hearth stop` closes each of the key's offers still on sale with a version that ends where it is written", () => {
-  const newest = new Map([
-    [`${HOST}/live`, at(100n, { until: 5000n, mines: 9n })],
-    [`${HOST}/ended`, at(100n, { until: 200n })],
-    [`${HOST}/closed`, at(300n, { until: 300n })],
-    [`${OTHER}/theirs`, at(100n, { until: 5000n })],
-  ]);
-  const actions = closingActions({ newest, self: HOST, height: 400n });
-  assert.deepEqual(actions.map((a) => [a.id, a.key]), [["live", `offer/${HOST}/live/400`]]);
-  const closed = parseOffer(offerText(400n, actions[0].newValue));
-  assert.equal(isClosed(closed), true);
-  assert.deepEqual({ ...closed, created: undefined, until: undefined }, { ...TERMS, created: undefined, until: undefined }, "the same terms, closed");
-});
-
-test("after a close, the chains with paid time left are those owed and active; orders still settling are counted", () => {
-  const SPEC = { maxNumberOfTransactionsPerBlock: 10n, maxStateGrowth: 1000n, maxBlockSize: 1000n, premine: 0n, targetBlockTime: 5000n, initialReward: 10n, halvingInterval: 1000n, halfLife: 100n, wasmPolicies: [] };
-  const payloadText = formatPayload({ spec: SPEC, premineTo: null, modules: {}, genesisTransactions: [] });
-  const order = (path, created, paid = 50n) => ({ key: orderKey({ host: HOST, id: "o", payer: BUYER, height: created, paid, path }), host: HOST, id: "o", buyer: BUYER, payer: BUYER, created, paid, path, payloadText });
-  const orders = [order("Nexus/testnet/kept", 300n, 500n), order("Nexus/testnet/lapsed", 120n), order("Nexus/testnet/late", 600n), order("Nexus/testnet/new", 598n)];
-  const versions = new Map([[`${HOST}/o`, [at(100n, { until: 5000n }), at(600n, { until: 600n })]]]);
-  const height = 610n;
-  const verdicts = judge({ sdk, height, versions, orders });
-  const { paid, settling } = paidTime({ orders, verdicts });
-  assert.deepEqual([...paid], [["Nexus/testnet/kept", 1300n]], "ten periods from 300; the lapsed one has none left");
-  assert.equal(verdicts.get(orders[2].key).kind, "pending");
-  assert.equal(settling, 2, "the orders at 598 and 600, before the close takes effect (610), still settle: owed once judged");
-  assert.equal(closedAt({ newest: new Map([[`${HOST}/o`, at(600n, { until: 600n })], [`${OTHER}/o`, at(700n, { until: 700n })]]), self: HOST }), 600n);
-  assert.equal(closedAt({ newest: new Map([[`${HOST}/o`, at(100n, { until: 5000n })]]), self: HOST }), undefined, "nothing closed");
+  assert.equal(market.moduleCID, moduleCID(sdk, MODULE), "the market runs this build of policy/src");
+  assert.deepEqual(spec.wasmPolicies.map((p) => p.moduleCID), [market.moduleCID]);
 });
 
 test("`hearth earn` works for the sponsor's payouts until the address holds enough, waiting out 429s", async () => {
@@ -312,16 +159,6 @@ test("`hearth earn` works for the sponsor's payouts until the address holds enou
   assert.ok(have >= 5n);
   assert.ok(refusedWork >= 2 && refusedShares >= 2, "it asked again after each 429");
   assert.ok(earnedAsked >= 1 && lines.some((l) => /earned \d+ of the 25 a payout needs/.test(l)), lines.join("\n"));
-});
-
-test("a closing seller is done once nothing is on sale, settling or paid, also when it never wrote a close", () => {
-  const base = { live: [], closed: 600n, height: 626n, pending: false, owed: 0 };
-  assert.deepEqual(closingDone(base), { done: true });
-  assert.deepEqual(closingDone({ ...base, closed: undefined, height: 5n }), { done: true }, "its offers ran out, or it had none: nothing to wait for");
-  assert.equal(closingDone({ ...base, closed: undefined, owed: 1 }).line, "serving 1 paid chains");
-  assert.equal(closingDone({ ...base, closed: undefined, pending: true }).line, "orders still settle");
-  assert.equal(closingDone({ ...base, height: 625n }).line, "orders settle until market block 626");
-  assert.match(closingDone({ ...base, live: [{ id: "o" }] }).line, /waiting for the close of o/);
 });
 
 test("the operator reopens: a foreground `hearth sell`, or `--install` for the service's next start; a service restart never does", () => {

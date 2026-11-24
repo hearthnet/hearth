@@ -1,4 +1,4 @@
-// hearth sell --public: the proxy buyers reach through the tunnel, the tunnel's URL, and cloudflared's install.
+// hearth sell --public: the proxy the public reaches through the tunnel, the tunnel's URL, and cloudflared's install.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -15,14 +15,12 @@ const echo = (name) => new Promise((ok) => {
   s.listen(0, "127.0.0.1", () => ok(s));
 });
 
-test("the proxy: the proof lists the seller, /sponsor goes to the sponsor without the prefix, the rest to the node", async () => {
+test("the proxy: /sponsor goes to the sponsor without the prefix, the rest to the node", async () => {
   const node = await echo("node"), sponsor = await echo("sponsor");
-  const proxy = await startProxy({ nodePort: node.address().port, sponsorPort: sponsor.address().port, seller: "bafyseller" });
+  const proxy = await startProxy({ nodePort: node.address().port, sponsorPort: sponsor.address().port });
   const at = (p, init) => fetch(`http://127.0.0.1:${proxy.port}${p}`, init);
   try {
-    const proof = await at("/.well-known/lattice.json");
-    assert.equal(proof.headers.get("access-control-allow-origin"), "*");
-    assert.deepEqual(await proof.json(), { sellers: ["bafyseller"] });
+    assert.equal((await (await at("/.well-known/lattice.json")).json()).name, "node", "no proof of a domain: there are no url records");
     assert.deepEqual(await (await at("/sponsor/terms")).json(), { name: "sponsor", method: "GET", url: "/terms", body: "" });
     assert.deepEqual(await (await at("/sponsor/work", { method: "POST", body: "{\"a\":1}" })).json(), { name: "sponsor", method: "POST", url: "/work", body: "{\"a\":1}" });
     assert.equal((await (await at("/api/chain/info?chainPath=Nexus")).json()).url, "/api/chain/info?chainPath=Nexus");
@@ -35,7 +33,7 @@ test("the proxy: the proof lists the seller, /sponsor goes to the sponsor withou
 test("the proxy forwards no header a client could pose as another address with, nor hop-by-hop ones", async () => {
   const seen = [];
   const node = await new Promise((ok) => { const s = createServer((req, res) => { seen.push(req.headers); res.setHeader("Connection", "close"); res.end("ok"); }); s.listen(0, "127.0.0.1", () => ok(s)); });
-  const proxy = await startProxy({ nodePort: node.address().port, sponsorPort: 1, seller: "bafyseller" });
+  const proxy = await startProxy({ nodePort: node.address().port, sponsorPort: 1 });
   try {
     await fetch(`http://127.0.0.1:${proxy.port}/api/chain/info`, { headers: { "X-Forwarded-For": "6.6.6.6", Forwarded: "for=6.6.6.6", "X-Real-IP": "6.6.6.6", "Proxy-Authorization": "x", Accept: "application/json" } });
     const h = seen[0];
@@ -49,7 +47,7 @@ test("a body stays framed though Connection names content-length: one request re
   const { connect } = await import("node:net");
   const seen = [];
   const node = await new Promise((ok) => { const s = createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { seen.push({ url: req.url, body: b }); res.end("ok"); }); }); s.listen(0, "127.0.0.1", () => ok(s)); });
-  const proxy = await startProxy({ nodePort: node.address().port, sponsorPort: 1, seller: "bafyseller" });
+  const proxy = await startProxy({ nodePort: node.address().port, sponsorPort: 1 });
   try {
     const inner = "GET /smuggled HTTP/1.1\r\nHost: x\r\n\r\n";
     await new Promise((ok) => {
@@ -63,7 +61,7 @@ test("a body stays framed though Connection names content-length: one request re
 });
 
 test("the proxy says which side does not answer", async () => {
-  const proxy = await startProxy({ nodePort: 1, sponsorPort: 1, seller: "bafyseller" });
+  const proxy = await startProxy({ nodePort: 1, sponsorPort: 1 });
   try {
     const r = await fetch(`http://127.0.0.1:${proxy.port}/sponsor/terms`);
     assert.equal(r.status, 502);

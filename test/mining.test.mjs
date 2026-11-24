@@ -1,37 +1,21 @@
-// Old mining claims and burns: an offer's old `mines` line, the hashrate
-// a chain's own blocks credit, burn addresses, and `--burn`'s once-only rule.
+// Hash rates and burns: the hashrate a chain's own blocks credit, burn
+// addresses, and `--burn`'s once-only rule.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import * as sdk from "../vendor/lattice-sdk.js";
-import { burnAddress, formatOffer, offerText, parseOffer, pathFromNexus } from "../client/records.mjs";
+import { burnAddress, pathFromNexus } from "../client/records.mjs";
 import { creditedHashrate, formatRate, workOf } from "../client/mining.mjs";
-import { burn, burnChain, burnShortfall, offerFromFlags } from "../host/hearth.mjs";
+import { burn, burnChain, burnShortfall } from "../host/hearth.mjs";
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), "../bin/hearth.mjs");
 const KEY = new Uint8Array(32).fill(1);
 const HOST = sdk.accountFromPrivateKey(KEY).address;
 const MARKET = "Nexus/testnet/lodger-3129cc";
-const TERMS = { parent: "Nexus/testnet", price: 100n, period: 1440n, until: 900n, capacity: 50n, maxBlockSize: 1000000n, maxStateGrowth: 1000000n,
-  minTargetBlockTime: 5000n, maxNumberOfTransactionsPerBlock: 1000n, modules: "any" };
 
-test("old offers with a `mines` claim or a `blocks mine` line still parse; nothing writes `mines`", () => {
-  const plain = formatOffer(TERMS);
-  assert.equal(parseOffer(offerText(7n, plain)).mines, undefined);
-  assert.equal(formatOffer(parseOffer(offerText(7n, plain))), plain, "an offer without a claim writes the same bytes");
-  const claimed = `${plain}\nmines 1000000000000`;
-  assert.equal(parseOffer(offerText(7n, claimed)).mines, 1000000000000n, "an old claim is read");
-  assert.equal(formatOffer(parseOffer(offerText(7n, claimed))), plain, "and not written again");
-  assert.deepEqual(parseOffer(offerText(7n, `${plain}\nblocks mine`)), parseOffer(offerText(7n, plain)), "the old `blocks` form");
-  assert.equal(parseOffer(offerText(7n, `${plain}\nblocks commit\nmines 5`)).mines, 5n);
-  for (const bad of ["mines 0", "mines 01", "mines -1", "mines 1.5", "mines ", "mines x"]) assert.equal(parseOffer(offerText(7n, `${plain}\n${bad}`)), undefined, bad);
-  assert.equal(parseOffer(offerText(7n, `${plain}\nmines 1\nmines 2`)), undefined, "one claim at most");
-});
-
-test("offer flags make no mining claim", () => {
-  assert.equal(offerFromFlags({ price: "100/day" }).mines, undefined);
+test("hash rates for people", () => {
   assert.equal(formatRate(1250000000000n), "1.25 TH/s");
   assert.equal(formatRate(999n), "999 H/s");
   assert.equal(formatRate(1500n), "1.5 kH/s");
