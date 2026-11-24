@@ -36,8 +36,12 @@
 // time ran out is left out, and the node stops it unless another layer lists
 // it; what it stored stays, but the pins launching it made go (`DELETE
 // /pins/<cid>`, each Volume and module no chain owed now needs, of those
-// its launches pinned, listed in `launch-pins.json` beside its key; never
-// in a pass where an order could not be judged). Each owed
+// its launches pinned that the node did not pin already, listed in
+// `launch-pins-<market>.json` beside its key; never while a chain it hosts
+// has an order not judged yet). A chain it hosts with an order not judged
+// yet (a spec above it not read) stays listed. A path owed for a genesis
+// other than the one the node runs there is left out for one pass, so the
+// node lets that chain go, then listed and launched with the owed genesis. Each owed
 // chain it has not launched in this process it then launches from the
 // genesis its order carries (host/launch.mjs), every pass until the node
 // weighs the genesis. The specs above each ordered path come from its node,
@@ -83,8 +87,8 @@ const { formatOffer, isHTTPS, parseOffer } = await import(join(HERE, "../client/
 const { offerWrite, recordsBody, submit, keyFileJSON } = await import(join(HERE, "../client/tx.mjs"));
 const { ordered, sellerChains, fundingMessage, fundingStep, burn, burnChain, parseAmount, rpcPort, nodeSecret, authedFetch,
   nodeVersion, chainSync, ensureKey, operatorRPC, sellerFiles, startsReopened, parseSize, offerTerms, DEFAULT_STORAGE_RATE, DEFAULT_STORAGE_BUDGET } = await import(join(HERE, "hearth.mjs"));
-const { judgeOwn, report, REMOTE_STORAGE } = await import(join(HERE, "status.mjs"));
-const { genesisPins, launch, launchPins, unpin } = await import(join(HERE, "launch.mjs"));
+const { hostingPlan, judgeOwn, report, REMOTE_STORAGE } = await import(join(HERE, "status.mjs"));
+const { launch, launchPins, launchPinsFile, unpin } = await import(join(HERE, "launch.mjs"));
 const { miner } = await import(join(HERE, "pace.mjs"));
 const { sponsorAnswers, sponsorArgs, sponsorBinary, sponsorStorage, supervise } = await import(join(HERE, "sponsor.mjs"));
 
@@ -233,10 +237,10 @@ async function ensureBurn() {
 // ---- one pass ----
 
 let checked = false, syncLine, sponsor, mine, funded = false, fundLine;
-/** The owed chains whose genesis the node has weighed, since this process started. */
+/** `<path> <genesis>` of each owed chain whose genesis the node has weighed, since this process started. */
 const launched = new Set();
-/** What its launches pinned, beside its key: all it ever unpins. */
-const pinned = launchPins(join(dirname(resolve(args.key)), "launch-pins.json"));
+/** What its launches pinned on this market, beside its key: all it ever unpins. */
+const pinned = launchPins(launchPinsFile(dirname(resolve(args.key)), marketPath), (line) => log(line));
 
 /** The sponsor beside the node, started once the seller's key is funded (`fund`). */
 function startSponsor() {
@@ -319,19 +323,23 @@ async function pass() {
     ready = open.length > 0 || await fund(true);
     if (ready) startSponsor();
   }
-  const judged = await judgeOwn({ sdk, n, m, self, market: marketPath, chains: chainsOf(n) });
+  const hosted = (await readFragment()).fragment.hostedChains ?? [];
+  const judged = await judgeOwn({ sdk, n, m, self, market: marketPath, hosted, chains: chainsOf(n) });
   const { owed } = judged;
   // What launching a chain no longer owed pinned, and no owed chain needs.
   try { for (const cid of await unpin({ rpc, released: judged.released, pinned })) log("unpinned", cid, "(no chain owed now needs it)"); }
   catch (e) { log("could not unpin what ended chains pinned (will retry)", e.message); }
-  // A chain owed again later is launched again: its pins went.
-  for (const path of launched) if (!owed.has(path)) launched.delete(path);
+  // The genesis the node runs at each owed path: another one is let go first (`hostingPlan`).
+  const runs = new Map(await Promise.all([...owed.keys()].map(async (p) => [p, await n.api("/api/chain/info", p).then((i) => i.genesisHash, () => undefined)])));
+  const plan = hostingPlan({ owed, unsure: judged.unsure, hosted, runs });
+  // A chain owed again later, or for another genesis, is launched again: its pins went.
+  for (const k of launched) { const [p, cid] = k.split(" "); if (owed.get(p)?.cid !== cid) launched.delete(k); }
   const [sellerAccount, sponsorAccount] = await Promise.all([n.account(marketPath, self), n.account(marketPath, sponsorAddress)]);
   log(report({ market: marketPath, height: m.height, seller: { address: self, balance: sellerAccount.balance }, sponsor: { address: sponsorAddress, balance: sponsorAccount.balance },
     ...judged, storage: root ? await sponsorStorage(args["sponsor-port"]) : REMOTE_STORAGE }).join("\n  "));
   if (closing) {
     if (open.length) log(`closing: waiting for the close of ${open.map((k) => k.slice(self.length + 1)).join(", ")} (run hearth stop again if it does not land)`);
-    else if (!owed.size) {
+    else if (!owed.size && !plan.list.length) {
       const { fragment, condition } = await readFragment();
       if (fragment.hostedChains) await rpc(FRAGMENT, undefined, "DELETE", condition);
       log("closed: nothing paid is left; no longer hosts", (fragment.hostedChains ?? []).join(" ") || "anything", "(what it stored stays)");
@@ -341,16 +349,17 @@ async function pass() {
   // One write of its key's a pass: the burn waits for a pass with no offer write.
   const wrote = !closing && ready && await ensureOffer(m).catch((e) => { log("could not write the offer (will retry)", e.message); return false; });
 
-  // The market and every owed chain, with the chains above each; then each
-  // owed chain not launched yet, from its genesis.
-  try { await listInFragment(sellerChains({ market: marketPath, owed: [...owed.keys()] })); }
+  // The market and every chain it hosts this pass, with the chains above
+  // each; then each owed chain not launched yet, from its genesis.
+  for (const path of plan.switching) log("letting", path, `go this pass: the node runs ${runs.get(path)}, owed ${owed.get(path).cid}`);
+  try { await listInFragment(sellerChains({ market: marketPath, owed: plan.list })); }
   catch (e) { log("could not write the fragment (will retry)", e.message); }
-  for (const path of ordered([...owed.keys()])) {
-    if (launched.has(path)) continue;
+  for (const path of ordered(plan.launch)) {
+    const at = `${path} ${owed.get(path).cid}`;
+    if (launched.has(at)) continue;
     try {
-      pinned.add(genesisPins(owed.get(path)));
-      const status = await launch({ rpc, path, genesis: owed.get(path) });
-      if (status === "tree") { launched.add(path); log("launched", path, owed.get(path).cid); }
+      const status = await launch({ rpc, path, genesis: owed.get(path), pinned });
+      if (status === "tree") { launched.add(at); log("launched", path, owed.get(path).cid); }
       else log("launching", path, `(the node holds its genesis as ${status}; again next pass)`);
     } catch (e) { log("the node did not take the genesis of", path, `(again next pass): ${e.message}`); }
   }

@@ -10,14 +10,15 @@ import { formatBytes } from "./hearth.mjs";
  * This seller's orders on the market `market` read `m`, judged as every
  * reader judges them, with the specs above each ordered path read as the
  * web app reads them (`chains`, client/chains.mjs: the node `n`, else the
- * nodes it lists): `{ mine, verdicts, owed, until, released, counts,
- * earned }`, `owed` mapping each chain owed now to the genesis the first
- * owed order there carries (`{ cid, volumes, modules, proofs }`, as
- * `parseOrderValue` reads it), `released` the Volumes and modules of chains
- * no longer owed that no chain owed now needs (none while any order is
- * unpriced or could not be judged): what to unpin.
+ * nodes it lists): `{ mine, verdicts, owed, until, unsure, released,
+ * counts, earned }`, `owed` mapping each chain owed now to the genesis the
+ * first owed order there carries (`{ cid, volumes, modules, proofs }`, as
+ * `parseOrderValue` reads it), `unsure` the paths with an order unpriced or
+ * that could not be judged (it may be owed), `released` the Volumes and
+ * modules of chains no longer owed that no chain owed now needs (none while
+ * a path in `hosted`, those the seller hosts now, is unsure): what to unpin.
  */
-export async function judgeOwn({ sdk, n, m, self, market, chains = chainReaders(sdk, n) }) {
+export async function judgeOwn({ sdk, n, m, self, market, hosted = [], chains = chainReaders(sdk, n) }) {
   const mine = m.orders.filter((o) => o.host === self).sort(byLanding);
   const specs = await chains.specsDownTo([...new Set(mine.map((o) => parentOf(o.path)))].filter(Boolean));
   const verdicts = judge({ sdk, height: m.height, orders: mine, market, specs });
@@ -34,9 +35,26 @@ export async function judgeOwn({ sdk, n, m, self, market, chains = chainReaders(
   }
   const counts = {};
   for (const v of verdicts.values()) counts[v.kind] = (counts[v.kind] ?? 0) + 1;
-  // Nothing is released while any order could not be judged: it may be owed.
-  const unsure = [...verdicts.values()].some((v) => v.kind === "unpriced" || v.reason?.startsWith("the order could not be judged"));
-  return { mine, verdicts, owed, until, released: unsure ? [] : [...ended].filter((cid) => !kept.has(cid)), counts, earned: earnings({ self, mine, verdicts }) };
+  const unsure = [...new Set(mine.filter((o) => { const v = verdicts.get(o.key); return v.kind === "unpriced" || v.reason?.startsWith("the order could not be judged"); }).map((o) => o.path))];
+  // Nothing is released while a chain it hosts has an order that may be owed.
+  const released = unsure.some((p) => hosted.includes(p)) ? [] : [...ended].filter((cid) => !kept.has(cid));
+  return { mine, verdicts, owed, until, unsure, released, counts, earned: earnings({ self, mine, verdicts }) };
+}
+
+/**
+ * What the seller hosts this pass, from `owed` (`judgeOwn`), `unsure`
+ * (`judgeOwn`), `hosted` (the paths its fragment lists now) and `runs`
+ * (path → the genesis the node runs there, as its chain info names it):
+ * `{ list, launch, switching }`. A path owed for a genesis other than the
+ * one the node runs is `switching`: left out of the fragment for this pass,
+ * so the node lets that chain go, and launched once the node runs none
+ * there. A hosted path that is unsure stays listed: only a lapse or a void
+ * drops a chain, never a spec not read yet.
+ */
+export function hostingPlan({ owed, unsure, hosted, runs }) {
+  const switching = [...owed.keys()].filter((p) => runs.get(p) !== undefined && runs.get(p) !== owed.get(p).cid);
+  const launch = [...owed.keys()].filter((p) => !switching.includes(p));
+  return { list: [...new Set([...launch, ...unsure.filter((p) => hosted.includes(p) && !owed.has(p))])], launch, switching };
 }
 
 /**

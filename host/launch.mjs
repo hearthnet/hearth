@@ -2,7 +2,8 @@
 // carries: the node stores the genesis's Volumes and policy modules as
 // operator pins, then takes the genesis block with its child-only proofs as
 // a header synced from a peer would carry them (`POST /child-blocks`).
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import * as sdk from "../vendor/lattice-sdk.js";
 
 const base64 = (bytes) => Buffer.from(bytes).toString("base64");
@@ -15,9 +16,16 @@ const base64 = (bytes) => Buffer.from(bytes).toString("base64");
  * each time: a pin of what the node holds changes nothing), then the block
  * is submitted. Returns the node's status for it: `tree` once the node
  * weighs it; anything else, the caller tries again next pass. The node must
- * already list `path` (the seller's fragment) or it refuses the block.
+ * already list `path` (the seller's fragment) or it refuses the block. With
+ * `pinned` (`launchPins`), it first records the CIDs the node does not pin
+ * yet: what `unpin` may later take down.
  */
-export async function launch({ rpc, path, genesis }) {
+export async function launch({ rpc, path, genesis, pinned }) {
+  if (pinned) {
+    // Recorded before it pins, and only what the node did not pin already (its sponsor's, say).
+    const { body } = await rpc("/pins");
+    pinned.add(genesisPins(genesis).filter((cid) => !(body.pins ?? []).includes(cid)));
+  }
   const volumes = Object.entries(genesis.volumes).map(([cid, archive]) => sdk.decodeVolumeArchive(cid, Buffer.from(archive, "base64")));
   for (const v of volumes) await rpc("/pins", { cid: v.rootCID, entries: Object.fromEntries(v.entries.map((e) => [e.cid, base64(e.bytes)])) });
   for (const [cid, module] of Object.entries(genesis.modules)) {
@@ -40,12 +48,24 @@ export async function launch({ rpc, path, genesis }) {
   return body.status;
 }
 
-/** The CIDs this seller's launches pinned, kept in `file` (a JSON list). */
-export function launchPins(file) {
+/** Where a seller keeps what its launches pinned for `market`: one file per market, beside its key. */
+export const launchPinsFile = (dir, market) => join(dir, `launch-pins-${market.replaceAll("/", "_")}.json`);
+
+/**
+ * The CIDs this seller's launches pinned, kept in `file` (a JSON list of
+ * CIDs, written whole by rename). A file that is not one is said (`warn`)
+ * and read as empty.
+ */
+export function launchPins(file, warn = console.warn) {
   let cids = [];
-  try { cids = JSON.parse(readFileSync(file, "utf8")); } catch {}
+  try {
+    const read = JSON.parse(readFileSync(file, "utf8"));
+    if (Array.isArray(read) && read.every((c) => typeof c === "string")) cids = read;
+    else warn(`${file} is not a list of CIDs: read as empty`);
+  } catch (e) { if (e.code !== "ENOENT") warn(`${file} could not be read (${e.message}): read as empty`); }
   const set = new Set(cids);
-  return { has: (cid) => set.has(cid), add(cids) { for (const c of cids) set.add(c); this.save(); }, delete(cid) { set.delete(cid); this.save(); }, save: () => writeFileSync(file, JSON.stringify([...set].sort())) };
+  const save = () => { writeFileSync(`${file}.tmp`, JSON.stringify([...set].sort())); renameSync(`${file}.tmp`, file); };
+  return { has: (cid) => set.has(cid), add(more) { for (const c of more) set.add(c); save(); }, delete(cid) { set.delete(cid); save(); } };
 }
 
 /** What launching `genesis` pins: each Volume and each module. */

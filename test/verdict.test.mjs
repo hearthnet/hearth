@@ -4,12 +4,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as sdk from "../vendor/lattice-sdk.js";
 import { RENEW, chainPrice, formatOffer, formatOrderValue, orderKey, parseGenesis, parseOffer, parseOrderKey, parseOrderValue, pathPrice } from "../client/records.mjs";
-import { judge } from "../client/verdict.mjs";
-import { earnings, judgeOwn } from "../host/status.mjs";
-import { launchPins, unpin } from "../host/launch.mjs";
-import { mkdtempSync } from "node:fs";
+import { holderOf, judge } from "../client/verdict.mjs";
+import { earnings, hostingPlan, judgeOwn } from "../host/status.mjs";
+import { launch, launchPins, launchPinsFile, unpin } from "../host/launch.mjs";
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { heldCheck } from "../app/launch.mjs";
 import { base64 } from "../app/genesis.mjs";
 import { MODULE_CID, SIZES, mint, respec } from "./minted.mjs";
 import { reader } from "../client/market.mjs";
@@ -134,6 +135,42 @@ test("one genesis per path at an offer: the first owed order to land fixes it; a
   assert.equal(own.owed.get(PATH).cid, GENESIS);
 });
 
+test("a host holds a path for one genesis across all its offers; a renewal at any of them pays for it", async () => {
+  const other = mint(PATH, { timestamp: 1_900_000_000_000 });
+  const first = order({ id: "o2", landed: 10n }), rival = order({ id: "o1", landed: 30n, value: other.value });
+  const renewal = order({ id: "o1", n: 1, payer: OTHER, landed: 40n, value: RENEW });
+  const v = judged([rival, first, renewal]);
+  assert.match(v.get(rival.key).reason, /another genesis holds this path at this host while it is paid/);
+  assert.equal(v.get(first.key).until, 10n + 200n, "the renewal at the host's other offer pays for the holder");
+  assert.equal(holderOf({ orders: [rival, first, renewal], verdicts: v, host: HOST, path: PATH }), GENESIS);
+  assert.throws(() => heldCheck({ chosen: [{ host: HOST, id: "o9" }], orders: [first], verdicts: v, path: PATH }), /hosts another genesis/, "any of the host's offers");
+});
+
+test("the page renews only the genesis holding the path at that host: not one another genesis took over", () => {
+  const other = mint(PATH, { timestamp: 1_900_000_000_000 });
+  const first = order({ landed: 10n }), after = order({ n: 1, landed: 120n, value: other.value });
+  const v = judged([first, after], { height: 150n });
+  assert.equal(holderOf({ orders: [first, after], verdicts: v, host: HOST, path: PATH }), other.cid);
+  assert.equal(holderOf({ orders: [first], verdicts: judged([first], { height: 150n }), host: HOST, path: PATH }), GENESIS, "lapsed, but nobody took over: it may renew");
+});
+
+test("a takeover is launched: the seller lets the old genesis go for a pass, then launches the new one", async () => {
+  const other = mint(PATH, { timestamp: 1_900_000_000_000 });
+  const a = order({ landed: 10n }), b = order({ n: 1, landed: 120n, value: other.value });
+  const own = await judgeOwn({ sdk, m: { height: 150n, orders: [a, b] }, self: HOST, market: MARKET, hosted: [PATH], chains: { specsDownTo: async () => SPECS } });
+  assert.equal(own.owed.get(PATH).cid, other.cid);
+  const first = hostingPlan({ owed: own.owed, unsure: own.unsure, hosted: [PATH], runs: new Map([[PATH, GENESIS]]) });
+  assert.deepEqual(first, { list: [], launch: [], switching: [PATH] }, "unhosted this pass");
+  const next = hostingPlan({ owed: own.owed, unsure: own.unsure, hosted: [], runs: new Map([[PATH, undefined]]) });
+  assert.deepEqual(next, { list: [PATH], launch: [PATH], switching: [] }, "then listed and launched");
+  assert.deepEqual(hostingPlan({ owed: own.owed, unsure: [], hosted: [PATH], runs: new Map([[PATH, other.cid]]) }).launch, [PATH], "the node runs it: nothing to let go");
+});
+
+test("uncertainty never drops a chain: a hosted path with an order not judged yet stays listed", () => {
+  const plan = hostingPlan({ owed: new Map(), unsure: ["Nexus/a/app", "Nexus/b/app"], hosted: ["Nexus/a/app"], runs: new Map() });
+  assert.deepEqual(plan.list, ["Nexus/a/app"], "hosted and unsure stays; never hosted is not added");
+});
+
 test("owed must be runnable: proofs of this genesis at this path, its children index and spec in its volumes, a path under Nexus apart from the market", () => {
   const v = parseOrderValue(VALUE);
   assert.match(one(order({ n: 1, value: formatOrderValue({ ...v, proofs: ["AAAA"] }) })).reason, /proof/);
@@ -219,12 +256,50 @@ test("the seller unpins only what its own launches pinned, and nothing in a pass
   const unpriced = order({ n: 2, path: "Nexus/unread/app", landed: 200n });
   const judgeAt = (orders) => judgeOwn({ sdk, m: { height: 250n, orders }, self: HOST, market: MARKET, chains: { specsDownTo: async () => SPECS } });
   assert.ok((await judgeAt([ended, now])).released.includes(GENESIS));
-  assert.deepEqual((await judgeAt([ended, now, unpriced])).released, [], "an unpriced order may be owed");
+  assert.ok((await judgeAt([ended, now, unpriced])).released.includes(GENESIS), "an unpriced order for a path it never hosted holds nothing back");
+  const judgeHosting = (orders) => judgeOwn({ sdk, m: { height: 250n, orders }, self: HOST, market: MARKET, hosted: ["Nexus/unread/app"], chains: { specsDownTo: async () => SPECS } });
+  assert.deepEqual((await judgeHosting([ended, now, unpriced])).released, [], "an unpriced order for a path it hosts may be owed");
   const calls = [];
   const rpc = async (route, body, method = "GET") => { calls.push(`${method} ${route}`); return { body: { pins: [GENESIS] } }; };
   const file = join(mkdtempSync(join(tmpdir(), "hearth-pins-")), "launch-pins.json");
   assert.deepEqual(await unpin({ rpc, released: [GENESIS], pinned: launchPins(file) }), [], "pinned by someone else (its sponsor)");
   assert.deepEqual(calls, []);
+});
+
+test("launch records only what the node did not pin already, so what its sponsor pinned is never unpinned", async () => {
+  const v = parseOrderValue(VALUE);
+  const sponsors = Object.keys(v.volumes).find((c) => c !== GENESIS);
+  const nodePins = new Set([sponsors]);
+  const deleted = [];
+  const rpc = async (route, body, method = body === undefined ? "GET" : "POST") => {
+    if (route === "/pins" && method === "GET") return { body: { pins: [...nodePins] } };
+    if (route === "/pins") { nodePins.add(body.cid); return { body: {} }; }
+    if (method === "DELETE") { deleted.push(route.slice(6)); return { body: {} }; }
+    return { body: { status: "tree" } };
+  };
+  const file = launchPinsFile(mkdtempSync(join(tmpdir(), "hearth-pins-")), MARKET);
+  const pinned = launchPins(file);
+  await launch({ rpc, path: PATH, genesis: { cid: GENESIS, volumes: v.volumes, modules: v.modules, proofs: v.proofs }, pinned });
+  assert.equal(launchPins(file).has(sponsors), false, "already pinned: not recorded");
+  assert.equal(launchPins(file).has(GENESIS), true);
+  await unpin({ rpc, released: [sponsors, GENESIS], pinned });
+  assert.deepEqual(deleted, [GENESIS], "the sponsor's pin stays");
+});
+
+test("launch-pins is one file per market, written whole, and a damaged one reads as empty with a warning", () => {
+  const dir = mkdtempSync(join(tmpdir(), "hearth-pins-"));
+  assert.equal(launchPinsFile(dir, "Nexus/testnet/hearth"), join(dir, "launch-pins-Nexus_testnet_hearth.json"));
+  const file = launchPinsFile(dir, MARKET);
+  launchPins(file).add(["b", "a"]);
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), ["a", "b"]);
+  assert.deepEqual(readdirSync(dir), [basename(file)], "no temporary file left");
+  for (const bad of ["{not json", '{"a":1}', "[1,2]"]) {
+    writeFileSync(file, bad);
+    const warnings = [];
+    const pins = launchPins(file, (l) => warnings.push(l));
+    assert.equal(pins.has("a"), false);
+    assert.equal(warnings.length, 1, bad);
+  }
 });
 
 test("cost: an order short of the chains above is void before its genesis is decoded, and an order's genesis is decoded once", () => {

@@ -10,13 +10,14 @@
 //          one period paid for the whole path (a renewal too)
 //   owed   served from the block it landed in until its paid time runs out
 //
-// Paid time: a chain's owed order and its renewals at one offer, oldest
+// Paid time: a chain's owed orders and its renewals at one host, oldest
 // first, each add `floor(paid / price) * period` (the price and period of
 // the terms it landed on) from where paid time ends, or from the block the
 // payment landed in when it had run out.
 //
-// One genesis per path at one offer while it is paid: the first owed order
-// to land there (ties in one block by key) holds the path; another genesis
+// One genesis per path at one host (whichever of its offers) while it is
+// paid: the first owed order to land there (ties in one block by key)
+// holds the path, and renewals at any of the host's offers pay for it; another genesis
 // landing there before the holder's paid time ends is void; one landing
 // after it ends holds the path from then on, and so on. A same-block
 // front-run (a rival order whose key sorts first) costs the rival at least
@@ -41,7 +42,7 @@ export function judge({ sdk, height, orders, market, specs = new Map() }) {
   const live = new Set(orders.map((o) => o.key));
   for (const key of checked.keys()) if (!live.has(key)) checked.delete(key);
   const verdicts = new Map();
-  const chains = new Map();  // `<host>/<id>/<path>` → the genesis holding it now: `{ genesis, until, owed }`
+  const chains = new Map();  // `<host>/<path>` → the genesis holding it now: `{ genesis, until, owed }`
   const held = [];  // every holder in turn, its owed orders
   const voidOf = (o, reason) => verdicts.set(o.key, { kind: "void", reason, order: { landed: o.landed, paid: o.paid } });
   // Paid time: from where it ends, or from the block the payment landed in when it had run out.
@@ -55,13 +56,13 @@ export function judge({ sdk, height, orders, market, specs = new Map() }) {
       if (missing) { verdicts.set(o.key, { kind: "unpriced", reason: `no spec read yet for ${missing}`, order: { landed: o.landed, paid: o.paid } }); continue; }
       const terms = parseOffer(o.terms);
       const aboveSpecs = above.map((p) => specs.get(p));
-      const at = `${o.host}/${o.id}/${o.path}`;
+      const at = `${o.host}/${o.path}`;
       let chain = chains.get(at);
       // The chains above alone cost at most the whole path: an order short
       // of them is void before its genesis is decoded.
       const reason = !terms ? "the offer's terms do not parse"
         : o.paid < pathPrice(terms, aboveSpecs) ? "paid less than one period for the whole path"
-        : o.value === RENEW ? (chain ? undefined : "no owed order for this chain at this offer before it")
+        : o.value === RENEW ? (chain ? undefined : "no owed order for this chain at this host before it")
         : genesisReason(sdk, o);
       if (reason) { voidOf(o, reason); continue; }
       const genesis = o.value === RENEW ? chain.genesis : o.genesis;
@@ -102,4 +103,17 @@ function genesisReason(sdk, o) {
   }
   o.genesis = c.result.genesis;
   return c.result.reason;
+}
+
+/**
+ * The genesis holding `path` at `host` in `verdicts` (as `judge` gives
+ * them): the one its latest owed order carries, paid or not, or undefined.
+ */
+export function holderOf({ orders, verdicts, host, path }) {
+  let latest;
+  for (const o of orders) {
+    const v = verdicts.get(o.key);
+    if (o.host === host && o.path === path && v?.kind === "owed" && (!latest || v.from > latest.from)) latest = v;
+  }
+  return latest?.genesis;
 }

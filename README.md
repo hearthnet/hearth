@@ -319,8 +319,8 @@ block:
 - **void**: a path that is not under Nexus or is the market or a chain
   above it; a genesis that does not check out (its Volumes not exactly its
   own, a spec out of range, or proofs that do not prove this block at this
-  path); another genesis landing at that offer and path while the genesis
-  holding it there is still paid for; or less than one period paid for the whole path (a
+  path); another genesis landing at that host (any of its offers) and path
+  while the genesis holding it there is still paid for; or less than one period paid for the whole path (a
   renewal too); an order that cannot be judged is void, never the rest;
 - **owed**: from the block it landed in, for `floor(paid / price)` periods,
   the price summed over every chain on its path by each chain's spec;
@@ -348,7 +348,12 @@ it owes, with the chains above each, written with one
 `PUT /config/fragments/hostmarket` sent with the version it read. A lapsed
 chain is left out: the node stops it unless another layer (the operator's,
 the deploy's) lists it, and what it stored stays, but for the genesis pins
-no owed chain needs, which the seller unpins (`DELETE /pins/<cid>`). The node never restarts
+no owed chain needs, which the seller unpins (`DELETE /pins/<cid>`): only
+those its launches made, recorded in `launch-pins-<market>.json` beside
+its key, and none while a chain it hosts has an order not judged yet
+(such a chain stays listed). When another genesis takes a path over at
+the host, the seller leaves the path out for one pass, so the node lets
+the old chain go, then launches the new genesis. The node never restarts
 for it.
 
 Beside the node (loopback and its cookie):

@@ -12,7 +12,7 @@ import * as sdk from "../vendor/lattice-sdk.js";
 import { loadGenesis } from "../vendor/lattice-genesis.js";
 import { reader } from "../client/market.mjs";
 import { chainReaders, declaredNodes } from "../client/chains.mjs";
-import { judge } from "../client/verdict.mjs";
+import { holderOf, judge } from "../client/verdict.mjs";
 import { RENEW, parseOffer, parseOrderKey, moduleCID, isAddress, burnAddress, pathFromNexus, pathPrice } from "../client/records.mjs";
 import { snippet } from "./snippet.mjs";
 import { uniqueNodes, nodesNow, chooseAnchor, disagreeMessage, blocksTime, CHECKPOINT_AFTER, WALK } from "./anchor.mjs";
@@ -977,8 +977,10 @@ async function viewOrder(view, key, current) {
   // Keep it running: renew at the offer's terms now.
   const k = `${o.host}/${o.id}`, termsNow = m.offers.get(k), offerNow = m.terms.get(k);
   const pathSpecs = [...pathFromNexus(o.path).slice(0, -1).map((p) => m.specs.get(p)), spec];
-  const price = offerNow && pathSpecs.every(Boolean) ? pathPrice(offerNow, pathSpecs) : undefined;
-  $("#keep").innerHTML = `<h2>Keep it running</h2><p class="muted">When paid time ends, this host may stop hosting the chain; anyone still hosting it keeps it. ${price !== undefined ? `Anyone can pay for more time: each period is ${duration(offerNow.period)} for ${fmt(price)} ${coinName}, at this offer's terms now.` : "This offer is closed, so it sells no more time here."}</p>
+  // A renewal pays for the genesis holding the path at this host: only this order's, while it does.
+  const holds = holderOf({ orders: m.orders, verdicts, host: o.host, path: o.path }) === genesis;
+  const price = holds && offerNow && pathSpecs.every(Boolean) ? pathPrice(offerNow, pathSpecs) : undefined;
+  $("#keep").innerHTML = `<h2>Keep it running</h2><p class="muted">When paid time ends, this host may stop hosting the chain; anyone still hosting it keeps it. ${!holds ? `Another chain now holds ${esc(o.path)} at this host, so it sells no more time for this one.` : price !== undefined ? `Anyone can pay for more time: each period is ${duration(offerNow.period)} for ${fmt(price)} ${coinName}, at this offer's terms now.` : "This offer is closed, so it sells no more time here."}</p>
     ${price !== undefined ? `<div class="row"><div style="width:120px"><input id="more" type="number" min="1" value="7" aria-label="Periods"></div><button class="btn primary" id="renew">Pay for more</button><span class="small" id="renewNote"></span></div>` : ""}`;
   $("#renew")?.addEventListener("click", async () => {
     const periods = BigInt(Math.max(1, Math.floor(Number($("#more").value) || 1)));
