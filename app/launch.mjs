@@ -1,57 +1,51 @@
 // The one transaction that launches a chain at several hosts: an order at
-// each chosen offer, all naming the same path and payload.
+// each chosen offer, all naming the same path and carrying the same genesis.
 import { orderWrite, recordsBody } from "../client/tx.mjs";
-import { inForce, isClosed, parseOffer } from "../client/records.mjs";
+import { RENEW, parseOffer } from "../client/records.mjs";
 
 /**
- * The terms each chosen offer (`[[<host>/<id>, text], …]`, the version text
- * the buyer saw) sells at `height`, as `launchBody` takes them. Throws when a
- * host's version in force is no longer the one chosen, when it has closed, or
- * when `buyer` already has an order for `path` at one of these hosts in
- * `orders` (a payment that landed: launching again would pay twice).
+ * Throws when a chosen offer (`[{ host, id, terms }]`, `terms` its text as
+ * the buyer saw it) is gone or has other terms in `offers` (`<host>/<id>` →
+ * text now), or when `payer` already has an order for `path` at one of these
+ * hosts in `orders` (a payment that landed: launching again would pay twice).
+ * The market refuses an order whose offer changed anyway; this says why first.
  */
-export function launchTerms({ chosen, versions, orders, buyer, path, height, name = (host) => host }) {
-  for (const [k] of chosen) {
-    const host = k.split("/")[0];
-    if (orders.some((o) => o.host === host && o.path === path && o.buyer === buyer)) throw new Error(`You already paid for ${path} at ${name(host)}: see Your orders.`);
+export function launchCheck({ chosen, offers, orders, payer, path, name = (host) => host }) {
+  for (const { host, id, terms } of chosen) {
+    if (orders.some((o) => o.host === host && o.path === path && o.payer === payer && o.value !== RENEW)) throw new Error(`You already paid for ${path} at ${name(host)}: see Your apps.`);
+    const now = offers.get(`${host}/${id}`);
+    if (now === undefined) throw new Error(`The offer at ${name(host)} has closed; choose again.`);
+    if (now !== terms || !parseOffer(terms)) throw new Error(`${name(host)} changed its terms; review again.`);
   }
-  return chosen.map(([k, text]) => {
-    const host = k.split("/")[0];
-    if (inForce(versions.get(k), height) !== text) throw new Error(`${name(host)} changed its terms; review again.`);
-    const offer = parseOffer(text);
-    if (!offer || isClosed(offer) || offer.until <= height) throw new Error(`The offer at ${name(host)} has closed; review again.`);
-    return [k, offer];
-  });
 }
 
 /**
- * The body ordering `path` at each of `offers` (`[[<host>/<id>, terms], …]`,
- * at most one per host), sorted by host, so each host's write and payment
- * come together in one order.
+ * The body ordering `path` at each chosen offer (at most one per host),
+ * sorted by host, each `periods` periods priced over `specs` (every chain on
+ * the path, Nexus first, the new chain last), carrying `value`. `nonce`, the
+ * payer's market nonce, also tells its orders apart (`n`).
  */
-export function launchBody({ offers, buyer, path, payload, periods, height, nonce, chainPath, fee }) {
-  const hosts = offers.map(([k]) => k.split("/")[0]);
+export function launchBody({ chosen, payer, nonce, path, value, specs, periods, chainPath, fee }) {
+  const hosts = chosen.map((c) => c.host);
   if (new Set(hosts).size !== hosts.length) throw new Error("one offer per host");
-  const written = [...offers].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, offer]) => {
-    const [host, id] = k.split("/");
-    return orderWrite({ host, id, offer, buyer, path, payload, periods, height });
-  });
+  const written = [...chosen].sort((a, b) => (a.host < b.host ? -1 : 1))
+    .map(({ host, id, terms }) => orderWrite({ host, id, terms, payer, n: nonce, path, value, specs, periods }));
   return {
-    keys: written.map((w) => w.actions[0].key),
-    body: recordsBody({ signer: buyer, nonce, chainPath, actions: written.flatMap((w) => w.actions), payments: written.flatMap((w) => w.payments), fee }),
+    keys: written.map((w) => w.actions[1].key),
+    paid: written.reduce((sum, w) => sum + w.paid, 0n),
+    body: recordsBody({ signer: payer, nonce, chainPath, actions: written.flatMap((w) => w.actions), payments: written.flatMap((w) => w.payments), fee }),
   };
 }
 
 /**
  * One attempt at the launch transaction, read fresh from `reader`: the
  * nonce first, then the market. A payment that lands between the two reads
- * then shows as an order (refused by `launchTerms`) while the nonce is the
- * one it used, so a second payment can never be signed with a fresh nonce.
- * Each order is priced at the version in force at the market's height.
+ * then shows as an order (refused by `launchCheck`) while the nonce is the
+ * one it used, so a second payment is never signed with a fresh nonce.
  */
-export async function launchAttempt({ reader, market, chosen, buyer, path, payload, periods, chainPath, fee, name }) {
-  const { nonce } = await reader.account(market, buyer);
+export async function launchAttempt({ reader, market, chosen, payer, path, value, specs, periods, chainPath, fee, name }) {
+  const { nonce } = await reader.account(market, payer);
   const latest = await reader.market(market);
-  const offers = launchTerms({ chosen, versions: latest.versions, orders: latest.orders, buyer, path, height: latest.height, name });
-  return launchBody({ offers, buyer, path, payload, periods, height: latest.height, nonce, chainPath, fee: await fee() });
+  launchCheck({ chosen, offers: latest.offers, orders: latest.orders, payer, path, name });
+  return launchBody({ chosen, payer, nonce, path, value, specs, periods, chainPath, fee: await fee() });
 }
