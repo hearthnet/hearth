@@ -526,10 +526,10 @@ async function viewLaunch(view, _, current) {
         // Re-render from the fresh market, so the changed offer is not chosen and sent again.
         if (why) { launchInFlight = false; carriedError = `The offer at ${hostName(k.split("/")[0])} ${why} since you chose it. Check your hosts and launch again.`; route(); return; }
       }
-      const hosts = new Set(offers.map(([k]) => k.split("/")[0]));
-      const takenHere = fresh.orders.some((x) => hosts.has(x.host) && x.path === path && ["owed", "pending"].includes(verdicts.get(x.key)?.kind) && x.buyer !== me.address);
+      // A launched chain is not a committed child of its parent, so the market's orders are the record of a name: any host's.
+      const takenHere = fresh.orders.some((x) => x.path === path && ["owed", "pending"].includes(verdicts.get(x.key)?.kind) && x.buyer !== me.address);
       const exists = await (await readerOf(offers[0][1].parent)).hasChild(offers[0][1].parent, path.split("/").at(-1));
-      if (takenHere || exists) throw new Error(`${path} is already ${exists ? "a chain" : "ordered at one of these hosts"}; pick another name.`);
+      if (takenHere || exists) throw new Error(`${path} is already ${exists ? "a chain" : "ordered by someone else"}; pick another name.`);
       button.textContent = offers.length > 1 ? "Paying the hosts…" : "Paying the host…";
       const payload = { spec: s, premineTo: s.premine > 0n ? me.address : null, modules: mods, genesisTransactions: [] };
       let keys;
