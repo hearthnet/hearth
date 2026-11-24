@@ -145,9 +145,11 @@ async function nodeRoot({ create = false, install = false } = {}) {
     // when not public if Hearth opened it (or --key-only says so); one the operator set stays.
     const mark = join(root, "hearth/public-port");
     if (a.public) {
+      // Marked as Hearth's only when no port was set before; the mark first, so a crash never leaves an unmarked one.
+      let set = false;
+      try { set = execFileSync(a.lattice, ["config", "get", "publicRead", "--root", root], { encoding: "utf8" }).trim() !== ""; } catch {}
+      if (!set) { mkdirSync(dirname(mark), { recursive: true }); writeFileSync(mark, "opened by hearth sell for its tunnel\n"); }
       execFileSync(a.lattice, ["config", "set", `publicRead=${PUBLIC_READ_PORT}`, "publicSubmit=true", "--root", root], { stdio: "ignore" });
-      mkdirSync(dirname(mark), { recursive: true });
-      writeFileSync(mark, "opened by hearth sell for its tunnel\n");
     } else if (a["key-only"] || existsSync(mark)) {
       execFileSync(a.lattice, ["config", "unset", "publicRead", "publicSubmit", "--root", root], { stdio: "ignore" });
       rmSync(mark, { force: true });
