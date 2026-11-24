@@ -1,6 +1,6 @@
 {
   "name": "@hearthnet/hearth",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Sell Lattice chain hosting on the Hearth market from your node, in one command.",
   "type": "module",
   "bin": { "hearth": "bin/hearth.mjs" },
