@@ -465,7 +465,7 @@ test("`hearth sell` alone sells at the default terms, and its first run says wha
     const run = () => hearth(["sell", "--root", node.root, "--once", "--lattice", node.lattice, "--sponsor-bin", node.sponsor]);
     const first = await run();
     assert.equal(first.code, 0, first.out);
-    assert.match(first.out, /You earn Hearth coin \(the market's coin\): buyers' orders pay the seller's key, and the blocks it makes pay its sponsor's key .*Spend it on hosting or storage from any seller on the market\./);
+    assert.match(first.out, /You earn Hearth coin \(the market's coin\): buyers' orders pay the seller's key, and the blocks it makes pay its sponsor's key .*Spend it on hosting from any seller on the market\./);
     assert.match(first.out, /offer 1: 6000 market coin per kB\/s of block capacity and 600 per kB of state growth, per 1d, for each chain on a buyer's path; the hash rate its miner measures/);
     const again = await run();
     assert.doesNotMatch(again.out, /You earn Hearth coin/, "said once, when the key is made");
