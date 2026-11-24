@@ -194,6 +194,8 @@ export function checkSellFlags(a) {
     throw new Error(`--parent is a chain path from Nexus, e.g. Nexus, not ${a.parent}`);
   }
   const offerId = a.price ? offerFromFlags({ price: a.price, parent: a.parent, chains: a.chains, id: a.id }).id : undefined;
+  if (a.public && (a.url || a.proof || a["sponsor-url"])) throw new Error("--public makes the URL itself: leave out --url, --proof and --sponsor-url");
+  if (a.public && a.node) throw new Error("--public needs the node beside it: give --root, or neither (Hearth runs its own), not --node");
   if (a["burn-chain"] && !a.burn) throw new Error("--burn-chain goes with --burn");
   if (a.burn) { parseAmount(a.burn, "--burn"); burnChain(a["burn-chain"] ?? a.market, a.market); }
   if (a.fee !== undefined) parseAmount(a.fee, "--fee");

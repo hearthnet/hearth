@@ -190,6 +190,21 @@ it claims no domain, so the app lists its offers under its key, marked
 offers carry the domain's name and *Verified*. A url whose domain does not
 list the address is hidden: anyone could name someone else's URL.
 
+**No domain: `--public`.** A key-only host takes orders, but a buyer's page
+cannot reach its chains: it has no URL to read or write them at.
+`hearth sell --public` gives a machine with no domain one: Hearth sets its
+node's public read port (`publicRead` 8082, taking writes), runs a local
+proxy that serves that port, the sponsor under `/sponsor` and the
+`/.well-known/lattice.json` that lists the seller, and opens a Cloudflare
+quick tunnel to it (cloudflared, pinned and checked like the node; no
+account). The seller sells with the tunnel's `https://….trycloudflare.com`
+URL as `--url` and `<url>/sponsor` as `--sponsor-url`, so its offers show as
+*Verified* and buyers can use their chains. The URL changes each time it
+starts, and the seller writes the new one. Quick tunnels are Cloudflare's
+free tier without uptime promises: right for testnets and trying Hearth; a
+host with its own domain gives `--url`. With `--root`, the node must
+already have `publicRead` and `publicSubmit` set; Hearth says how.
+
 **Keep it running.** `--install` writes units for both the node
 (Hearth's own, or the one at `--root`) and the seller, the seller after the node:
 systemd user units on Linux (`~/.config/systemd/user/hearth-node.service`,

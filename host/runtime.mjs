@@ -11,7 +11,11 @@ import { join } from "node:path";
 /** Where each tool's release tarball is: a URL template with {version} and {platform}. */
 export const RELEASES_URL = "https://lattice.build/releases.json";
 
-/** The releases Hearth runs, and the binaries it takes from each. */
+/**
+ * The releases Hearth runs, and the binaries it takes from each: from
+ * RELEASES_URL's template (in `<tool>-<version>-<platform>/bin/`), or from
+ * `urls` (a tarball holding the binary at its top, or the binary itself).
+ */
 export const PINNED = {
   "lattice-node": {
     version: "5.0.0",
@@ -27,6 +31,22 @@ export const PINNED = {
     sha256: {
       "macos-arm64": "e6e044eda166284f91cffcf856dcbe639b1700b6cc452eda8549fb93558b979b",
       "linux-amd64": "d726ab95b3ba55dbc9bf4f49cf11a2a0af31ee8ca6235273b718f75972fa9587",
+    },
+  },
+};
+
+/** Cloudflare's tunnel client, for `hearth sell --public` only (installed then). */
+export const TUNNEL = {
+  cloudflared: {
+    version: "2026.10.7",
+    bins: ["cloudflared"],
+    urls: {
+      "macos-arm64": "https://github.com/cloudflare/cloudflared/releases/download/2026.10.7/cloudflared-darwin-arm64.tgz",
+      "linux-amd64": "https://github.com/cloudflare/cloudflared/releases/download/2026.10.7/cloudflared-linux-amd64",
+    },
+    sha256: {
+      "macos-arm64": "3586ccf397e98e5f437e60e7c307ca6ac463e110580503af8bb8e6f9ebf831bd",
+      "linux-amd64": "1f99fb518b83dec2ba8d870a7cc991d82a77e6196295a3d2754ba17ab9f91872",
     },
   },
 };
@@ -52,16 +72,16 @@ export async function installTools({ home, platform = platformName(), fetchImpl 
   const bin = join(hearthHome(home), "bin");
   const paths = {};
   let urls;
-  for (const [tool, { version, bins, sha256 }] of Object.entries(pinned)) {
+  for (const [tool, { version, bins, sha256, urls: own }] of Object.entries(pinned)) {
     const dir = join(bin, `${tool}-${version}`);
     const whole = () => bins.every((b) => existsSync(join(dir, b)));
     if (!whole()) {
-      if (!urls) {
+      if (!own && !urls) {
         const res = await fetchImpl(RELEASES_URL);
         if (!res.ok) throw new Error(`${RELEASES_URL}: HTTP ${res.status}`);
         urls = await res.json();
       }
-      const url = String(urls[tool] ?? "").replaceAll("{version}", version).replaceAll("{platform}", platform);
+      const url = own ? String(own[platform] ?? "") : String(urls[tool] ?? "").replaceAll("{version}", version).replaceAll("{platform}", platform);
       if (!url.startsWith("https://")) throw new Error(`${RELEASES_URL} gives no download for ${tool}`);
       log(`downloading ${tool} ${version} (${platform}), once, into ${bin}`);
       const res = await fetchImpl(url);
@@ -76,13 +96,17 @@ export async function installTools({ home, platform = platformName(), fetchImpl 
       }
       const tmp = mkdtempSync(join(bin, ".download-"));
       try {
-        writeFileSync(join(tmp, "release.tar.gz"), body);
-        try { execFileSync("tar", ["-xzf", join(tmp, "release.tar.gz"), "-C", tmp], { stdio: "ignore" }); }
-        catch (e) { throw new Error(`could not unpack ${tool} with tar (${e.code ?? `exit ${e.status}`}): install tar and gzip`); }
         const staged = join(tmp, "staged");
         mkdirSync(staged);
+        const tarball = !own || url.endsWith(".tgz") || url.endsWith(".tar.gz");
+        if (tarball) {
+          writeFileSync(join(tmp, "release.tar.gz"), body);
+          try { execFileSync("tar", ["-xzf", join(tmp, "release.tar.gz"), "-C", tmp], { stdio: "ignore" }); }
+          catch (e) { throw new Error(`could not unpack ${tool} with tar (${e.code ?? `exit ${e.status}`}): install tar and gzip`); }
+        }
         for (const b of bins) {
-          renameSync(join(tmp, `${tool}-${version}-${platform}`, "bin", b), join(staged, b));
+          if (!tarball) writeFileSync(join(staged, b), body);
+          else renameSync(own ? join(tmp, b) : join(tmp, `${tool}-${version}-${platform}`, "bin", b), join(staged, b));
           chmodSync(join(staged, b), 0o755);
         }
         // Another hearth command may have installed it meanwhile: theirs stands.

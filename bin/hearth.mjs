@@ -60,7 +60,8 @@ import { DEFAULT_MARKET, DEFAULT_PRICE, WHY_SELL, DEFAULT_STORAGE_RATE, authedFe
   installedSeller, nodeSecret, nodeVersion, offerFromFlags, markClosing, markReopen, onPath, sponsorBooks, operatorRPC, parseAmount, rpcPort,
   sellerFiles, serviceUnits, sweep, waitSynced } from "../host/hearth.mjs";
 import { sponsorAnswers, sponsorBinary, sponsorStorage, unpin } from "../host/sponsor.mjs";
-import { initManagedNode, installTools, keepManagedNode, managedRoot, nodeAnswers, runManagedNode } from "../host/runtime.mjs";
+import { initManagedNode, installTools, keepManagedNode, managedRoot, nodeAnswers, runManagedNode, TUNNEL } from "../host/runtime.mjs";
+import { PUBLIC_READ_PORT, startProxy, startTunnel } from "../host/public.mjs";
 import { REMOTE_STORAGE, judgeOwn, report } from "../host/status.mjs";
 import { isRootCID } from "../client/records.mjs";
 import { stop } from "../host/stop.mjs";
@@ -72,7 +73,7 @@ const { name, version } = JSON.parse(readFileSync(join(HERE, "../package.json"),
 const NODE = "[--root <node root> | --node <url> --token-file <file>] [--key <file>] [--lattice <path>]";
 const VERBS = {
   sell: `hearth sell [--price ${DEFAULT_PRICE}] [--parent Nexus] [--chains 10]
-                   [--url https://host.example [--proof <url>]] [--market ${DEFAULT_MARKET}]
+                   [--public | --url https://host.example [--proof <url>]] [--market ${DEFAULT_MARKET}]
                    ${NODE} [--offer offer.json]
                    [--id <offer id>] [--storage-offer storage.json] [--interval 30] [--fee <n>] [--once]
                    [--sponsor-bin <path>] [--sponsor-port 8650] [--sponsor-url <https url>]
@@ -100,7 +101,7 @@ try { parsed = parseArgs({
   options: {
     root: { type: "string" }, node: { type: "string" }, "token-file": { type: "string" },
     market: { type: "string", default: DEFAULT_MARKET }, key: { type: "string" }, offer: { type: "string" },
-    id: { type: "string" }, url: { type: "string" }, proof: { type: "string" }, "storage-offer": { type: "string" },
+    id: { type: "string" }, url: { type: "string" }, proof: { type: "string" }, public: { type: "boolean" }, "storage-offer": { type: "string" },
     lattice: { type: "string" }, interval: { type: "string", default: "30" }, "storage-budget": { type: "string" }, once: { type: "boolean", default: false }, fee: { type: "string" },
     price: { type: "string" }, parent: { type: "string" }, chains: { type: "string" },
     install: { type: "boolean", default: false }, resume: { type: "boolean", default: false }, float: { type: "string", default: "100" },
@@ -136,10 +137,25 @@ async function nodeRoot({ create = false, install = false } = {}) {
   const root = managedRoot(home);
   if (!create && !existsSync(join(root, "hearth/seller.json"))) fail("nothing is sold from this machine yet: run hearth sell (or give --root, or --node with --token-file)");
   a.lattice ??= (await tools()).lattice;
+  if (create && a.public) {
+    // Read by anyone through the tunnel, and taking their writes: set before the node starts.
+    initManagedNode({ home, lattice: a.lattice });
+    execFileSync(a.lattice, ["config", "set", `publicRead=${PUBLIC_READ_PORT}`, "publicSubmit=true", "--root", root], { stdio: "ignore" });
+  }
   if (install) return initManagedNode({ home, lattice: a.lattice });
   // The seller keeps its node up; another verb runs it for as long as it takes.
   if (create) return (await keepManagedNode({ home, lattice: a.lattice })).root;
   return (await runManagedNode({ home, lattice: a.lattice })).root;
+}
+
+/** The node's public read port at `root` (`lattice config get publicRead`), or a failure saying how to set it. */
+function publicReadPort(root) {
+  const get = (key) => { try { return JSON.parse(execFileSync(a.lattice, ["config", "get", key, "--root", root], { encoding: "utf8" })); } catch { return undefined; } };
+  const port = get("publicRead");
+  if (!Number.isInteger(port) || port <= 0 || get("publicSubmit") !== true) {
+    fail(`--public serves the node's public read port, and the node at ${root} has none taking writes: run\n  ${a.lattice} config set publicRead=${PUBLIC_READ_PORT} publicSubmit=true --root ${root}\nthen restart the node`);
+  }
+  return port;
 }
 
 /** The node (beside it, or remote), its secret, and the seller's key path. */
@@ -432,6 +448,19 @@ try {
   console.log(`${created ? "made the seller's key" : "seller key"} ${key}\naddress ${address}`);
   if (created) console.log(WHY_SELL);
 
+  let tunnel;
+  if (a.public && !a.install) {
+    const readPort = publicReadPort(root);
+    try { await fetch(`http://127.0.0.1:${readPort}/api/chain/info?chainPath=Nexus`, { signal: AbortSignal.timeout(5_000) }); }
+    catch { fail(`the node at ${root} does not answer on its public read port ${readPort}: restart it (it takes publicRead when it starts), then run hearth sell --public again`); }
+    const proxy = await startProxy({ nodePort: readPort, sponsorPort: Number(a["sponsor-port"] ?? 8650), seller: address });
+    const { cloudflared } = await installTools({ home: homedir(), pinned: TUNNEL });
+    tunnel = await startTunnel({ bin: cloudflared, port: proxy.port });
+    a.url = tunnel.url;
+    a["sponsor-url"] = `${tunnel.url}/sponsor`;
+    console.log(`public at ${tunnel.url} (a Cloudflare quick tunnel to this machine: a new URL each start, which the seller writes)`);
+  }
+
   // The offer: its file, or one written beside the key from the flags.
   let offerPath = a.offer && resolve(a.offer);
   if (a.price) {
@@ -466,7 +495,7 @@ try {
     const program = self.includes("/_npx/") ? [join(bin, "npx"), "--yes", `${name}@${version}`] : [nodePath, self];
     const lattice = a.lattice.includes("/") ? resolve(a.lattice) : onPath(a.lattice) ?? a.lattice;
     // A service restart is not the operator: it never reopens a closed offer.
-    const command = [...program, "sell", ...sellArgs, ...(a.resume ? [] : ["--resume"]), "--lattice", lattice];
+    const command = [...program, "sell", ...sellArgs, ...(a.resume ? [] : ["--resume"]), ...(a.public ? ["--public"] : []), "--lattice", lattice];
     const sponsorDir = a["sponsor-bin"]?.includes("/") ? [dirname(resolve(a["sponsor-bin"]))] : [];
     const path = [...new Set([bin, ...(lattice.startsWith("/") ? [dirname(lattice)] : []), ...sponsorDir, "/usr/local/bin", "/usr/bin", "/bin"])].join(delimiter);
     const { units, load, note } = serviceUnits({ platform: process.platform, home: homedir(), command, nodeCommand: root && [lattice, "up", "--root", root], path });
@@ -488,6 +517,8 @@ try {
   const child = spawn(process.execPath, [join(HERE, "../host/sell-hosting.mjs"), ...sellArgs, "--lattice", a.lattice], { stdio: "inherit" });
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => child.kill(signal));
   child.on("exit", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
+  // Buyers reach the chains only through the tunnel: without it, stop (a service starts it all again).
+  tunnel?.child.on("exit", (code) => { console.error(`hearth: the tunnel stopped (cloudflared exited ${code}): stopping the seller`); child.kill("SIGTERM"); process.exitCode = 1; });
 } catch (e) {
   fail(e.message);
 }
