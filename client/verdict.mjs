@@ -6,8 +6,8 @@
 //
 //   void   the buyer's fault, from the order's own bytes and the offer
 //   full   the offer had already sold `capacity` chains
-//   taken  the path holds another genesis, or an earlier order at this host
-//          named the path with another payload
+//   taken  the path holds another genesis, or another payload won the path
+//   pending  not settled, or a contest for the path not decided yet
 //   owed   served from `created + SETTLE` until its paid time runs out, or
 //          the offer ends, whichever is first
 //
@@ -27,10 +27,20 @@
 // payment's height) from where paid time ends, or from the payment's own
 // height when it had run out.
 //
+// A path's contest: the first order for a path that is neither void nor
+// full, at any host, keyed at market block c, opens it. Every such order for
+// the path keyed at c + CONTEST or before competes; they are grouped by
+// payload, and the payload whose orders paid the most in all wins (a tie:
+// the payload ordered first). Contestants stay pending until every one has
+// settled (c + CONTEST + SETTLE); then the others are taken. An order keyed
+// after c + CONTEST with another payload is taken. Paid time for the path
+// starts at c + CONTEST, when the contest closes, so a launched chain's
+// name is never taken from it.
+//
 // Full and taken are not the buyer's fault, and the host can cause both (its
 // own orders cost it only fees): readers count them against the host as
 // paid, not served.
-import { SETTLE, CREATED_WINDOW, inForce, isClosed, parseOffer, parsePayload, parentOf, pathPrice, moduleCID, parseStorageOffer, parseStorageOrderValue, isRootCID } from "./records.mjs";
+import { SETTLE, CREATED_WINDOW, CONTEST, inForce, isClosed, parseOffer, parsePayload, parentOf, pathPrice, moduleCID, parseStorageOffer, parseStorageOrderValue, isRootCID } from "./records.mjs";
 
 const byHeight = (a, b) => (a.created !== b.created ? (a.created < b.created ? -1 : 1) : a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 
@@ -59,7 +69,7 @@ export function judge({ sdk, height, versions, orders, renewals = [], genesis = 
   settled.sort(byHeight);
 
   const counted = new Map();  // offer → Set of chains it sold
-  const firstAtPath = new Map();  // `<host> <path>` → payload of the earliest non-void, non-full order
+  const contestants = new Map();  // path → its orders that are neither void nor full, oldest first
   const owed = new Map();  // `<host>/<id>/<path>` → { offer, orders } owed for that chain
   for (const o of settled) {
     const key = `${o.host}/${o.id}`;
@@ -75,33 +85,47 @@ export function judge({ sdk, height, versions, orders, renewals = [], genesis = 
       if (BigInt(sold.size) >= offer.capacity) { verdicts.set(o.key, { kind: "full", reason: `the offer had sold its ${offer.capacity} chains`, order: o.order }); continue; }
       sold.add(chain);
     }
-    const at = `${o.host} ${o.path}`;
     const facts = genesis.get(o.path);
     if (facts && !sameGenesis(sdk, facts, o.payload)) {
       verdicts.set(o.key, { kind: "taken", reason: "the path holds a genesis not built from this payload", order: o.order });
-      firstAtPath.has(at) || firstAtPath.set(at, o.payloadText);
       continue;
     }
-    if (firstAtPath.has(at) && firstAtPath.get(at) !== o.payloadText) {
-      verdicts.set(o.key, { kind: "taken", reason: "an earlier order at this host named the path with another payload", order: o.order });
+    contestants.has(o.path) ? contestants.get(o.path).push(o) : contestants.set(o.path, [o]);
+  }
+
+  const opened = new Map();  // path → market block its contest closes
+  for (const [path, all] of contestants) {
+    const closes = all[0].created + CONTEST;
+    opened.set(path, closes);
+    const within = all.filter((o) => o.created <= closes);
+    if (height < closes + SETTLE) {
+      for (const o of within) verdicts.set(o.key, { kind: "pending", settlesAt: closes + SETTLE, reason: `orders for ${path} compete until market block ${closes}: the genesis paid the most for wins`, order: o.order });
       continue;
     }
-    firstAtPath.set(at, o.payloadText);
-    const chainAt = `${o.host}/${o.id}/${o.path}`;
-    owed.has(chainAt) ? owed.get(chainAt).push(o) : owed.set(chainAt, [o]);
+    const paid = new Map();  // payload → paid in all, in order of first order
+    for (const o of within) paid.set(o.payloadText, (paid.get(o.payloadText) ?? 0n) + o.paid);
+    const won = [...paid].reduce((best, p) => (p[1] > best[1] ? p : best))[0];
+    for (const o of all) {
+      if (o.payloadText !== won) {
+        verdicts.set(o.key, { kind: "taken", reason: o.created <= closes ? `outbid: another genesis for ${path} was paid more by market block ${closes}` : `${path} went to another genesis at market block ${closes}`, order: o.order });
+        continue;
+      }
+      const chainAt = `${o.host}/${o.id}/${o.path}`;
+      owed.has(chainAt) ? owed.get(chainAt).push(o) : owed.set(chainAt, [o]);
+    }
   }
 
   for (const [chainAt, owedOrders] of owed) {
-    const start = owedOrders[0].created, key = `${owedOrders[0].host}/${owedOrders[0].id}`;
+    const start = owedOrders[0].created, key = `${owedOrders[0].host}/${owedOrders[0].id}`, closes = opened.get(owedOrders[0].path);
     // Each payment at the version in force at its own height; a renewal
     // where none is, or where it is a close, buys nothing.
     const payments = [...owedOrders, ...renewals.filter((r) => `${r.host}/${r.id}/${r.path}` === chainAt && r.created >= start)]
       .map((p) => ({ ...p, terms: termsAt(key, p.created) }))
       .filter((p) => p.terms && !isClosed(p.terms))
       .sort(byHeight);
-    const paidUntil = payments.reduce((end, p) => (end > p.created ? end : p.created) + (p.paid / pathPrice(p.terms, p.path)) * p.terms.period, 0n);
+    const paidUntil = payments.reduce((end, p) => (end > p.created ? end : p.created) + (p.paid / pathPrice(p.terms, p.path)) * p.terms.period, closes);
     const until = paidUntil < ends(key) ? paidUntil : ends(key);
-    for (const o of owedOrders) verdicts.set(o.key, { kind: "owed", from: o.created + SETTLE, until, active: height < until, order: o.order, payload: o.payload });
+    for (const o of owedOrders) verdicts.set(o.key, { kind: "owed", from: (o.created > closes ? o.created : closes) + SETTLE, until, active: height < until, order: o.order, payload: o.payload });
   }
   return verdicts;
 }

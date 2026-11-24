@@ -282,7 +282,7 @@ test("after a close, the chains with paid time left are those owed and active; o
   const height = 610n;
   const verdicts = judge({ sdk, height, versions, orders });
   const { paid, settling } = paidTime({ orders, verdicts });
-  assert.deepEqual([...paid], [["Nexus/testnet/kept", 1300n]], "ten periods from 300; the lapsed one has none left");
+  assert.deepEqual([...paid], [["Nexus/testnet/kept", 1310n]], "ten periods from 310, where the contest closes; the lapsed one has none left");
   assert.equal(verdicts.get(orders[2].key).kind, "pending");
   assert.equal(settling, 2, "the orders at 598 and 600, before the close takes effect (610), still settle: owed once judged");
   assert.equal(closedAt({ newest: new Map([[`${HOST}/o`, at(600n, { until: 600n })], [`${OTHER}/o`, at(700n, { until: 700n })]]), self: HOST }), 600n);

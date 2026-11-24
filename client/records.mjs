@@ -11,6 +11,9 @@
 export const CREATED_WINDOW = 10n;
 /** Blocks past `created` before an order is judged: the window plus six confirmations. */
 export const SETTLE = CREATED_WINDOW + 6n;
+// The first order for a path opens a contest: orders for it keyed this many
+// blocks after compete, and the genesis paid the most for wins (verdict.mjs).
+export const CONTEST = CREATED_WINDOW;
 
 const ADDRESS = /^bafyrei[a-z2-7]{52}$/;
 export const isAddress = (text) => typeof text === "string" && ADDRESS.test(text);

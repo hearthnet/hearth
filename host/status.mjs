@@ -47,7 +47,7 @@ export function earnings({ m, self, mine, renewals, verdicts }) {
   const settled = (p) => m.height >= p.created + SETTLE;
   let earned = 0n, settling = 0n;
   for (const o of mine.filter(others)) {
-    if (!settled(o)) settling += o.paid;
+    if (!settled(o) || verdicts.get(o.key)?.kind === "pending") settling += o.paid;
     else if (verdicts.get(o.key)?.kind === "owed") earned += o.paid;
   }
   for (const r of renewals.filter(others)) {

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as sdk from "../vendor/lattice-sdk.js";
-import { CREATED_WINDOW, formatOffer, formatPayload, inForce, isClosed, moduleCID, newestOffers, offerAt, offerText, orderKey, parseOffer, parsePayload, sponsorAt, strictJSON, SETTLE } from "../client/records.mjs";
+import { CREATED_WINDOW, formatOffer, formatPayload, inForce, isClosed, moduleCID, newestOffers, offerAt, offerText, orderKey, parseOffer, parsePayload, sponsorAt, strictJSON, SETTLE, CONTEST } from "../client/records.mjs";
 import { judge, sameGenesis } from "../client/verdict.mjs";
 
 const key = (n) => sdk.accountFromPrivateKey(new Uint8Array(32).fill(n)).address;
@@ -55,7 +55,8 @@ test("an offer without `blocks` and one written before it was dropped both parse
 
 test("an order is judged only once settled", () => {
   assert.deepEqual(verdicts([order({ created: 200n })], { height: 200n + SETTLE - 1n }), ["pending"]);
-  assert.deepEqual(verdicts([order({ created: 200n })], { height: 200n + SETTLE }), ["owed"]);
+  assert.deepEqual(verdicts([order({ created: 200n })], { height: 200n + CONTEST + SETTLE - 1n }), ["pending"], "its path's contest is open");
+  assert.deepEqual(verdicts([order({ created: 200n })], { height: 200n + CONTEST + SETTLE }), ["owed"]);
 });
 
 test("void: the buyer's fault, from bytes alone", () => {
@@ -139,17 +140,17 @@ test("one payload ordered at two paths is two chains", () => {
 });
 
 test("paid time: orders and renewals add whole periods, oldest first", () => {
-  const o = order({ created: 200n });  // one period: 200 + 1440
-  const until = (renewals, offer = OFFER) => judge({ sdk, height: 250n, versions: offers(offer), orders: [o], renewals }).get(o.key);
-  assert.equal(until([]).until, 1640n);
-  assert.equal(until([]).from, 200n + SETTLE);
+  const o = order({ created: 200n });  // one period from the contest's close: 210 + 1440
+  const until = (renewals, offer = OFFER) => judge({ sdk, height: 250n + SETTLE, versions: offers(offer), orders: [o], renewals }).get(o.key);
+  assert.equal(until([]).until, 1650n);
+  assert.equal(until([]).from, 210n + SETTLE);
   assert.equal(until([]).active, true);
-  assert.equal(until([renewal({ created: 300n, paid: 100n })]).until, 1640n + 2880n, "two more periods from where paid time ends");
+  assert.equal(until([renewal({ created: 300n, paid: 100n })]).until, 1650n + 2880n, "two more periods from where paid time ends");
   assert.equal(until([renewal({ created: 5000n })]).until, 6440n, "lapsed: from the renewal's own height");
-  assert.equal(until([renewal({ created: 300n, paid: 99n })]).until, 1640n + 1440n, "a part period counts as none");
-  assert.equal(until([renewal({ created: 199n })]).until, 1640n, "a renewal before the order does not count");
-  assert.equal(until([renewal({ created: 300n, path: "Nexus/testnet/y" })]).until, 1640n, "another chain's renewal");
-  assert.equal(until([renewal({ created: 300n, id: "other" })]).until, 1640n, "another offer's renewal");
+  assert.equal(until([renewal({ created: 300n, paid: 99n })]).until, 1650n + 1440n, "a part period counts as none");
+  assert.equal(until([renewal({ created: 199n })]).until, 1650n, "a renewal before the order does not count");
+  assert.equal(until([renewal({ created: 300n, path: "Nexus/testnet/y" })]).until, 1650n, "another chain's renewal");
+  assert.equal(until([renewal({ created: 300n, id: "other" })]).until, 1650n, "another offer's renewal");
   const ended = until([renewal({ created: 300n })], { ...OFFER, until: 260n });
   assert.equal(ended.until, 260n, "never past the offer's end");
 });
@@ -157,8 +158,8 @@ test("paid time: orders and renewals add whole periods, oldest first", () => {
 test("paid time: a second order for the same chain adds to it", () => {
   const first = order({ created: 200n }), second = order({ buyer: B, created: 300n });
   const v = judge({ sdk, height: 1000n, versions: offers(), orders: [first, second] });
-  assert.equal(v.get(first.key).until, 1640n + 1440n);
-  assert.equal(v.get(second.key).until, 1640n + 1440n);
+  assert.equal(v.get(first.key).until, 1650n + 1440n);
+  assert.equal(v.get(second.key).until, 1650n + 1440n);
 });
 
 test("an offer names the address its blocks pay and, if it runs one, its sponsor; both parse strictly", () => {
@@ -216,7 +217,7 @@ test("a host cannot backdate a version over an order it has seen", () => {
   const close = judged([o], { versions: [version({}), version({ created: 195n, until: 195n })] }).get(o.key);
   const rise = judged([o], { versions: [version({}), version({ created: 199n, price: 51n })] }).get(o.key);
   for (const v of [close, rise]) assert.deepEqual([v.kind, v.until], [honest.kind, honest.until]);
-  assert.deepEqual([honest.kind, honest.until], ["owed", 200n + 1440n]);
+  assert.deepEqual([honest.kind, honest.until], ["owed", 210n + 1440n]);
   // Keyed 10 back (it lands no later than the order it would void), it counts.
   assert.equal(judged([o], { versions: [version({}), version({ created: 190n, until: 190n })] }).get(o.key).kind, "void");
 });
@@ -225,7 +226,7 @@ test("closed: an order where the close is in force is void; time paid before it 
   const before = order({ created: 505n }), at = order({ buyer: B, path: "Nexus/testnet/y", created: 510n }), after = order({ buyer: C, path: "Nexus/testnet/z", created: 600n });
   const v = judged([before, at, after]);
   assert.deepEqual([at, after].map((o) => [v.get(o.key).kind, v.get(o.key).reason]), [["void", "the offer was closed at market block 500"], ["void", "the offer was closed at market block 500"]]);
-  assert.deepEqual([v.get(before.key).kind, v.get(before.key).until], ["owed", 505n + 1440n], "placed before the close took effect: a whole period, past the close");
+  assert.deepEqual([v.get(before.key).kind, v.get(before.key).until], ["owed", 515n + 1440n], "placed before the close took effect: a whole period, past the close");
   assert.equal(judged([order({ buyer: C, path: "Nexus/testnet/z", created: 705n })]).get(order({ buyer: C, path: "Nexus/testnet/z", created: 705n }).key).kind, "void", "not open again yet");
   const reopened = order({ buyer: C, path: "Nexus/testnet/z", created: 710n });
   assert.equal(judged([reopened]).get(reopened.key).kind, "owed", "opened again at 700, in force at 710");
@@ -234,21 +235,21 @@ test("closed: an order where the close is in force is void; time paid before it 
 test("closed: a renewal where the close is in force buys nothing; one before it counts", () => {
   const o = order({ created: 400n });
   const until = (renewals) => judged([o], { renewals }).get(o.key).until;
-  assert.equal(until([]), 1840n);
-  assert.equal(until([renewal({ created: 450n })]), 1840n + 1440n);
-  assert.equal(until([renewal({ created: 509n })]), 1840n + 1440n, "before the close takes effect");
-  assert.equal(until([renewal({ created: 510n })]), 1840n, "where it is in force");
-  assert.equal(until([renewal({ created: 650n })]), 1840n, "while closed");
-  assert.equal(until([renewal({ created: 800n })]), 1840n + 1440n, "opened again");
+  assert.equal(until([]), 1850n);
+  assert.equal(until([renewal({ created: 450n })]), 1850n + 1440n);
+  assert.equal(until([renewal({ created: 509n })]), 1850n + 1440n, "before the close takes effect");
+  assert.equal(until([renewal({ created: 510n })]), 1850n, "where it is in force");
+  assert.equal(until([renewal({ created: 650n })]), 1850n, "while closed");
+  assert.equal(until([renewal({ created: 800n })]), 1850n + 1440n, "opened again");
 });
 
 test("each payment buys time at the price in force at its own height", () => {
   const o = order({ created: 200n });  // 50 at price 50: one period, to 1640
   const versions = [version({}), version({ created: 300n, price: 100n })];
-  assert.equal(judged([o], { versions, renewals: [renewal({ created: 305n, paid: 100n })] }).get(o.key).until, 1640n + 2880n, "before the rise: two periods");
-  assert.equal(judged([o], { versions, renewals: [renewal({ created: 310n, paid: 100n })] }).get(o.key).until, 1640n + 1440n, "after it: one");
+  assert.equal(judged([o], { versions, renewals: [renewal({ created: 305n, paid: 100n })] }).get(o.key).until, 1650n + 2880n, "before the rise: two periods");
+  assert.equal(judged([o], { versions, renewals: [renewal({ created: 310n, paid: 100n })] }).get(o.key).until, 1650n + 1440n, "after it: one");
   const longer = [version({}), version({ created: 300n, period: 2000n })];
-  assert.equal(judged([o], { versions: longer, renewals: [renewal({ created: 400n })] }).get(o.key).until, 1640n + 2000n, "its period too");
+  assert.equal(judged([o], { versions: longer, renewals: [renewal({ created: 400n })] }).get(o.key).until, 1650n + 2000n, "its period too");
 });
 
 test("an offer ends at the latest `until` any version names", () => {
@@ -273,8 +274,8 @@ test("whole path: an order pays the price for each chain on its path, Nexus incl
   assert.equal(at([short]).get(short.key).kind, "void", "one chain's price is less than one period of the path");
   const one = order({ paid: 150n }), two = order({ buyer: B, paid: 300n, path: "Nexus/testnet/y" });
   const v = at([one, two], [renewal({ created: 300n, paid: 150n })]);
-  assert.equal(v.get(one.key).until, 200n + 1440n + 1440n, "one period, and one renewed");
-  assert.equal(v.get(two.key).until, 200n + 2880n, "two periods");
+  assert.equal(v.get(one.key).until, 210n + 1440n + 1440n, "one period, and one renewed");
+  assert.equal(v.get(two.key).until, 210n + 2880n, "two periods");
 
   const w = orderWrite({ host: HOST, id: "o", offer: WHOLE, buyer: A, path: "Nexus/testnet/x", payload: { spec: SPEC, premineTo: null, modules: {}, genesisTransactions: [] }, periods: 2n, height: 500n });
   assert.equal(w.payments[0].amount, 300n);
@@ -291,4 +292,39 @@ test("an offer's sponsor by its path is on the host's url record's origin, as th
   assert.equal(sponsorAt("/sponsor", undefined), undefined, "no url record: no sponsor");
   assert.equal(sponsorAt("https://other.example/s", "https://host.example"), "https://other.example/s");
   assert.equal(sponsorAt(undefined, "https://host.example"), undefined);
+});
+
+test("orders for one path compete for CONTEST blocks at any host: the genesis paid the most for wins", () => {
+  const HOST2 = key(5);
+  const versions = new Map([[`${HOST}/o`, [offerText(OFFER.created, formatOffer(OFFER))]], [`${HOST2}/o`, [offerText(OFFER.created, formatOffer(OFFER))]]]);
+  const at = (host, o) => ({ ...o, host, key: orderKey({ host, id: o.id, payer: o.buyer, height: o.created, paid: o.paid, path: o.path }) });
+  const mine = payload(), theirs = payload({ ...SPEC, initialReward: 11n });
+  const first = order({ created: 200n, paid: 50n }), richer = at(HOST2, order({ buyer: B, created: 205n, paid: 100n, payloadText: theirs }));
+  const judgeAt = (orders, height = 1000n) => judge({ sdk, height, versions, orders });
+
+  let v = judgeAt([first, richer], 200n + CONTEST + SETTLE - 1n);
+  assert.deepEqual([v.get(first.key).kind, v.get(richer.key).kind], ["pending", "pending"], "undecided until every contestant settles");
+  assert.match(v.get(first.key).reason, /compete until market block 210/);
+
+  v = judgeAt([first, richer]);
+  assert.deepEqual([v.get(first.key).kind, v.get(richer.key).kind], ["taken", "owed"], "the higher payment wins, at another host");
+  assert.match(v.get(first.key).reason, /outbid/);
+  assert.equal(v.get(richer.key).until, 210n + 2n * 1440n, "paid time from the contest's close");
+
+  const tie = at(HOST2, order({ buyer: B, created: 205n, paid: 50n, payloadText: theirs }));
+  v = judgeAt([first, tie]);
+  assert.deepEqual([v.get(first.key).kind, v.get(tie.key).kind], ["owed", "taken"], "a tie: the genesis ordered first");
+
+  const both = at(HOST2, order({ created: 201n, paid: 60n, payloadText: mine }));
+  v = judgeAt([first, both, richer]);
+  assert.deepEqual([first, both, richer].map((o) => v.get(o.key).kind), ["owed", "owed", "taken"], "one genesis at two hosts: its payments add up (110 > 100)");
+
+  const late = at(HOST2, order({ buyer: B, created: 211n, paid: 1000n, payloadText: theirs }));
+  v = judgeAt([first, late]);
+  assert.deepEqual([v.get(first.key).kind, v.get(late.key).kind], ["owed", "taken"], "after the contest closes no payment takes the path");
+  assert.match(v.get(late.key).reason, /went to another genesis at market block 210/);
+
+  const sameLate = at(HOST2, order({ buyer: C, created: 400n, paid: 50n, payloadText: mine }));
+  v = judgeAt([first, sameLate]);
+  assert.equal(v.get(sameLate.key).kind, "owed", "the winning genesis can still be ordered at another host");
 });

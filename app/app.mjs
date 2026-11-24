@@ -9,7 +9,7 @@
 import * as sdk from "../vendor/lattice-sdk.js";
 import { reader, holdsVolume } from "../client/market.mjs";
 import { judge, judgeStorage, sameGenesis } from "../client/verdict.mjs";
-import { parseOffer, parseOrderKey, parsePayload, parseStorageOffer, parseHostURL, sponsorAt, offerAt, isClosed, moduleCID, isAddress, SETTLE, burnAddress, pathFromNexus, pathPrice } from "../client/records.mjs";
+import { parseOffer, parseOrderKey, parsePayload, parseStorageOffer, parseHostURL, sponsorAt, offerAt, isClosed, moduleCID, isAddress, SETTLE, CONTEST, burnAddress, pathFromNexus, pathPrice } from "../client/records.mjs";
 import { checkListed, checkServing, sponsorURL as askable } from "../client/service.mjs";
 import { snippet } from "./snippet.mjs";
 import { uniqueNodes, nodesNow, chooseAnchor, disagreeMessage, blocksTime, CHECKPOINT_AFTER, WALK } from "./anchor.mjs";
@@ -441,6 +441,9 @@ async function viewLaunch(view, _, current) {
     $("#cost").innerHTML = offers.length === 0 ? ""
       : offers.length === 1 ? `<b>${fmt(cost)} ${coinName}</b> for ${duration(offers[0][1].period * periods)} of hosting`
       : `<b>${fmt(cost)} ${coinName}</b>: ${offers.map(([k, o]) => `${fmt(chainPrice(o) * periods)} for ${duration(o.period * periods)} at ${esc(hostName(k.split("/")[0]))}`).join(", ")}`;
+    // Another buyer's order for this name: still competing (the most paid wins), or it has won.
+    const rivals = nameOK ? m.orders.filter((x) => x.path === path && x.buyer !== me?.address).map((x) => verdicts.get(x.key)).filter(Boolean) : [];
+    const won = rivals.some((v) => v.kind === "owed"), contest = rivals.find((v) => v.kind === "pending" && v.reason);
     const out = { offers, texts: chosen.map((k) => [k, m.offers.get(k)]), path, periods, s: spec(), mods, nameOK };
     const note = $("#launchNote");
     const button = $("#launch");
@@ -449,7 +452,7 @@ async function viewLaunch(view, _, current) {
     const known = !me || (balances.market && balances.parent);   // unknown is not zero: never buy on a failed read
     const have = balances.market?.balance ?? 0n, need = cost + marketFee;
     const lacking = offers.length > 0 && known && have < need;
-    button.disabled = !offers.length || !nameOK;
+    button.disabled = !offers.length || !nameOK || won;
     if (RULES[rules()].file && !RULES[rules()].cid) { note.innerHTML = `<div class="notice bad">These rules did not load. <a href="" onclick="location.reload();return false">Reload</a> to try again.</div>`; button.disabled = true; }
     // A coin purchase not finished (in progress, or failed after paying): finish or dismiss it first.
     else if (buying && buying.step !== "done") { note.innerHTML = `<div class="notice">Finish or dismiss your coin purchase below before launching.</div>`; button.disabled = true; showPending(); }
@@ -464,7 +467,9 @@ async function viewLaunch(view, _, current) {
         note.innerHTML = `<p class="small muted">This costs <b>${fmt(pay)} ${esc(parentCoin)}</b>: Launch buys ${fmt(landed)} ${coinName} with it (the cheapest sale that covers this), then pays ${offers.length > 1 ? "the hosts" : "the host"}${left > 0n ? `; the ${fmt(left)} left over stays in your account` : ""}. It takes a few minutes. There are no refunds: <a href="#/hosts">check ${offers.length > 1 ? "each host's" : "the host's"} record</a> first.</p>`;
       }
     }
-    else note.innerHTML = offers.length ? `<p class="small muted">Each host must launch it within about ${duration(SETTLE + 5n)}, and paid time counts from then. If a host fills up or closes before your payment lands, that payment is not refunded: <a href="#/hosts">check a host's record</a> first.</p>` : "";
+    else if (won) note.innerHTML = `<div class="notice">${esc(path)} is someone else's app; pick another name.</div>`;
+    else if (contest) note.innerHTML = `<div class="notice">Someone else ordered ${esc(path)} too. Orders for a name compete until market block ${contest.settlesAt - SETTLE}: the app paid the most for gets it, and the others' payments are not refunded.</div>`;
+    else note.innerHTML = offers.length ? `<p class="small muted">Each host must launch it within about ${duration(SETTLE + CONTEST + 5n)}, and paid time counts from then. If a host fills up or closes before your payment lands, that payment is not refunded: <a href="#/hosts">check a host's record</a> first.</p>` : "";
     if (lastError) note.insertAdjacentHTML("afterbegin", `<div class="notice bad">${esc(lastError)}</div>`);
     button.textContent = lacking && !button.disabled ? "Buy coin and launch" : "Launch";
     return out;
@@ -526,10 +531,10 @@ async function viewLaunch(view, _, current) {
         // Re-render from the fresh market, so the changed offer is not chosen and sent again.
         if (why) { launchInFlight = false; carriedError = `The offer at ${hostName(k.split("/")[0])} ${why} since you chose it. Check your hosts and launch again.`; route(); return; }
       }
-      const hosts = new Set(offers.map(([k]) => k.split("/")[0]));
-      const takenHere = fresh.orders.some((x) => hosts.has(x.host) && x.path === path && ["owed", "pending"].includes(verdicts.get(x.key)?.kind) && x.buyer !== me.address);
+      // A name another buyer won at any host is taken; one still contested is the most paid's (the page says so).
+      const won = fresh.orders.some((x) => x.path === path && verdicts.get(x.key)?.kind === "owed" && x.buyer !== me.address);
       const exists = await (await readerOf(offers[0][1].parent)).hasChild(offers[0][1].parent, path.split("/").at(-1));
-      if (takenHere || exists) throw new Error(`${path} is already ${exists ? "a chain" : "ordered at one of these hosts"}; pick another name.`);
+      if (won || exists) throw new Error(`${path} is already ${exists ? "a chain" : "someone else's app"}; pick another name.`);
       button.textContent = offers.length > 1 ? "Paying the hosts…" : "Paying the host…";
       const payload = { spec: s, premineTo: s.premine > 0n ? me.address : null, modules: mods, genesisTransactions: [] };
       let keys;
