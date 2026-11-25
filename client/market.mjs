@@ -6,11 +6,10 @@ import { offerKey, parseOfferKey, parseOrderKey } from "./records.mjs";
 
 /**
  * The testnet market the web app and `hearth` use unless told otherwise:
- * its path and genesis. Now the v3 market (chain/market-v3-testnet.json);
- * the v3.1 market (chain/spec-v31-testnet.json, whose policy reads offers
- * as client/records.mjs does) takes its place here once its genesis is minted.
+ * its path and genesis: the v3.1 market (chain/market-v31-testnet.json),
+ * whose policy reads offers as client/records.mjs does.
  */
-export const TESTNET_MARKET = { path: "Nexus/testnet/hearth", genesis: "bafyreidrzde55u53grvbfs4woibgygtrex3blzdre4ibqkwlorv7x346ke" };
+export const TESTNET_MARKET = { path: "Nexus/testnet/hearth-87e175", genesis: "bafyreibvqahfvcdtzv2qdhx5cmjwrsvryerfz7jpt47zdop2w5n3gi4aki" };
 
 /** The CID of chain/policy-v31.wasm: the market policy whose records this version reads and writes. */
 export const MARKET_POLICY = "bafyreiascfdu23qs7eesg7fhndhxfxp7l7mlode2jghenfsygxlgg724l4";

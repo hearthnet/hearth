@@ -18,11 +18,11 @@ from any node that hosts it and checks every record against its CID.
 This version reads and writes the v3.1 market's records: a buyer pays a
 flat price for the chain it orders alone, at a host that sells under that
 chain's parent. Its policy (`chain/policy-v31.wasm`) is fixed at genesis,
-so it runs on a new testnet market chain, drafted in
-`chain/spec-v31-testnet.json` and not minted yet. Until it is, the default
-market (`TESTNET_MARKET` in `client/market.mjs`, one line) stays the v3
-market at `Nexus/testnet/hearth` (`chain/market-v3-testnet.json`), whose
-offers this version does not read. `hearth sell`, `stop` and `status` and
+so it runs on a new testnet market chain, `Nexus/testnet/hearth-87e175`
+(`chain/market-v31-testnet.json`), the default market (`TESTNET_MARKET` in
+`client/market.mjs`). The v3 market at `Nexus/testnet/hearth`
+(`chain/market-v3-testnet.json`) runs on, but this version does not read
+its offers. `hearth sell`, `stop` and `status` and
 the page read a market's spec first and refuse, saying so, any market whose
 policy is not exactly `chain/policy-v31.wasm` (`marketMismatch`), so this
 version never judges, unpins or writes on another. The mainnet market `Nexus/hearth`
@@ -65,7 +65,7 @@ which layer lists each chain) and stops with "Hearth needs node 5.1.0 or
 newer (you have X: ...)" beside an older one, X as `GET /status` reports it. It makes the seller's key at
 `<root>/hearth/seller.json` (mode 0600; it prints the address, never the
 key, and refuses a key file others can read) unless there is one, has the
-node host the market (`Nexus/testnet/hearth` unless `--market` says, and
+node host the market (`Nexus/testnet/hearth-87e175` unless `--market` says, and
 the chains above it), then sells in the foreground. A bad flag, or a
 `--root` where no node lives ("no node at <root>"), stops it before it
 writes anything. Every verb takes `--help`.
@@ -359,10 +359,9 @@ market, the spec naming the module by its own CID;
 `chain/market-v3-testnet.json` holds its path, genesis and module CID.
 `chain/policy-v31.wasm` is this repo's build of `policy/src`, and
 `chain/spec-v31-testnet.json` the v3.1 market's spec naming it: the v3
-spec but for its policy. Minting that market makes its genesis under
-`Nexus/testnet` (at a new name) from that spec and module; then its
-path and genesis go in a `chain/market-v31-testnet.json` and in
-`TESTNET_MARKET`.
+spec but for its policy, minted at `Nexus/testnet/hearth-87e175`;
+`chain/market-v31-testnet.json` holds its path, genesis and module CID,
+which `TESTNET_MARKET` names.
 
 **Hosts** run `host/sell-hosting.mjs` (what `hearth sell` runs) as a client
 of a node's operator API. Its own fragment of the node's configuration,
@@ -385,7 +384,7 @@ for it.
 Beside the node (loopback and its cookie):
 
 ```
-node host/sell-hosting.mjs --root /var/lib/lattice --market Nexus/testnet/hearth \
+node host/sell-hosting.mjs --root /var/lib/lattice --market Nexus/testnet/hearth-87e175 \
   --key host.json [--price 1000] [--period 1d] [--throughput 200000] [--storage 1000000] [--under <path>]... [--hashrate <n>] --lattice /usr/local/bin/lattice \
   [--sponsor-bin lattice-sponsor] [--sponsor-port 8650] [--sponsor-url https://host.example/sponsor] [--storage-rate 10240]
 ```
@@ -395,7 +394,7 @@ in its configuration) with a token made for it:
 
 ```
 node host/sell-hosting.mjs --node http://10.0.0.5:8090 --token-file seller.token \
-  --market Nexus/testnet/hearth --key host.json
+  --market Nexus/testnet/hearth-87e175 --key host.json
 ```
 
 Of the node's operator API, the seller uses `GET /config`,

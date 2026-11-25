@@ -5,8 +5,8 @@ import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { test } from "node:test";
 import * as sdk from "../vendor/lattice-sdk.js";
-import { moduleCID } from "../client/records.mjs";
-import { TESTNET_MARKET, marketMismatch } from "../client/market.mjs";
+import { moduleCID, parseGenesis } from "../client/records.mjs";
+import { MARKET_POLICY, TESTNET_MARKET, marketMismatch } from "../client/market.mjs";
 import { DEFAULT_MARKET, unservedParents, markClosing, markReopen, nodeVersion, sellerChains, sellerFiles, sponsorBooks, startsReopened, sweep, sweepReserve, syncProgress } from "../host/hearth.mjs";
 import { miner } from "../host/pace.mjs";
 import { launch } from "../host/launch.mjs";
@@ -141,13 +141,25 @@ test("chain/spec.json names chain/policy.wasm by its own CID, the module the old
   assert.equal(JSON.parse(readFileSync(new URL("../chain/market.json", import.meta.url), "utf8")).moduleCID, cid);
 });
 
-test("the default market is the v3 market on testnet, whose spec names chain/policy-v3.wasm by its own CID", () => {
-  const market = JSON.parse(readFileSync(new URL("../chain/market-v3-testnet.json", import.meta.url), "utf8"));
-  const spec = JSON.parse(readFileSync(new URL("../chain/spec-v3-testnet.json", import.meta.url), "utf8"));
+test("the default market is the v3.1 market on testnet, whose spec names chain/policy-v31.wasm by its own CID", () => {
+  const market = JSON.parse(readFileSync(new URL("../chain/market-v31-testnet.json", import.meta.url), "utf8"));
+  const spec = JSON.parse(readFileSync(new URL("../chain/spec-v31-testnet.json", import.meta.url), "utf8"));
   assert.deepEqual(TESTNET_MARKET, { path: market.path, genesis: market.genesis });
   assert.equal(market.path, DEFAULT_MARKET);
-  assert.equal(market.moduleCID, moduleCID(sdk, MODULE), "the market runs chain/policy-v3.wasm");
+  assert.equal(market.moduleCID, MARKET_POLICY, "the market runs chain/policy-v31.wasm");
   assert.deepEqual(spec.wasmPolicies.map((p) => p.moduleCID), [market.moduleCID]);
+});
+
+test("the default market's genesis, as lattice-node minted it, is chain/spec-v31-testnet.json with chain/policy-v31.wasm", () => {
+  const minted = JSON.parse(readFileSync(new URL("./fixtures/genesis-testnet-hearth-v31.json", import.meta.url), "utf8"));
+  const spec = JSON.parse(readFileSync(new URL("../chain/spec-v31-testnet.json", import.meta.url), "utf8"));
+  const module = readFileSync(new URL("../chain/policy-v31.wasm", import.meta.url)).toString("base64");
+  const g = parseGenesis(sdk, { ...minted, modules: { [MARKET_POLICY]: module }, proofs: [] }, TESTNET_MARKET.path);
+  assert.equal(g.error, undefined);
+  assert.equal(g.cid, TESTNET_MARKET.genesis);
+  assert.equal(marketMismatch(g.spec, TESTNET_MARKET.path), undefined);
+  const plain = (v) => JSON.parse(JSON.stringify(v, (_, x) => (typeof x === "bigint" ? Number(x) : x)));
+  assert.deepEqual(plain(g.spec), spec);
 });
 
 test("this version refuses any market whose policy is not the v3.1 one: the v3 market, mainnet's, none", () => {
@@ -159,7 +171,7 @@ test("this version refuses any market whose policy is not the v3.1 one: the v3 m
   }
 });
 
-test("chain/spec-v31-testnet.json, the v3.1 market's draft spec, names chain/policy-v31.wasm by its own CID", () => {
+test("chain/spec-v31-testnet.json, the v3.1 market's spec, names chain/policy-v31.wasm by its own CID", () => {
   const spec = JSON.parse(readFileSync(new URL("../chain/spec-v31-testnet.json", import.meta.url), "utf8"));
   const cid = moduleCID(sdk, readFileSync(new URL("../chain/policy-v31.wasm", import.meta.url)).toString("base64"));
   assert.deepEqual(spec.wasmPolicies.map((p) => p.moduleCID), [cid]);
