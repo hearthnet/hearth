@@ -5,7 +5,7 @@ import { test } from "node:test";
 import * as sdk from "../vendor/lattice-sdk.js";
 import { reader } from "../client/market.mjs";
 
-const KEY = `order/${"bafyrei" + "a".repeat(52)}/o1/${"bafyrei" + "b".repeat(52)}/0/5/Nexus/x/app`;
+const KEY = `order/${"bafyrei" + "a".repeat(52)}/o1/${"bafyrei" + "b".repeat(51) + "a"}/0/5/Nexus/x/app`;
 
 /** A market chain of heights 0..tip whose state holds KEY from height `from`: `{ latest, byHeight, content }`. */
 function chain(tip, from, content) {

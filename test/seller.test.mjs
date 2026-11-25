@@ -6,7 +6,7 @@ import { createServer } from "node:http";
 import { test } from "node:test";
 import * as sdk from "../vendor/lattice-sdk.js";
 import { moduleCID } from "../client/records.mjs";
-import { TESTNET_MARKET } from "../client/market.mjs";
+import { TESTNET_MARKET, marketMismatch } from "../client/market.mjs";
 import { DEFAULT_MARKET, unservedParents, markClosing, markReopen, nodeVersion, sellerChains, sellerFiles, sponsorBooks, startsReopened, sweep, sweepReserve, syncProgress } from "../host/hearth.mjs";
 import { miner } from "../host/pace.mjs";
 import { launch } from "../host/launch.mjs";
@@ -143,6 +143,15 @@ test("the default market is the v3 market on testnet, whose spec names chain/pol
   assert.equal(market.path, DEFAULT_MARKET);
   assert.equal(market.moduleCID, moduleCID(sdk, MODULE), "the market runs chain/policy-v3.wasm");
   assert.deepEqual(spec.wasmPolicies.map((p) => p.moduleCID), [market.moduleCID]);
+});
+
+test("this version refuses any market whose policy is not the v3.1 one: the v3 market, mainnet's, none", () => {
+  const spec = (name) => JSON.parse(readFileSync(new URL(`../chain/${name}`, import.meta.url), "utf8"));
+  assert.equal(marketMismatch(spec("spec-v31-testnet.json"), "Nexus/testnet/hearth-x"), undefined);
+  for (const [why, s] of [["v3", spec("spec-v3-testnet.json")], ["mainnet", spec("spec.json")], ["none", { ...spec("spec-v31-testnet.json"), wasmPolicies: [] }],
+    ["another beside it", { ...spec("spec-v31-testnet.json"), wasmPolicies: [...spec("spec-v31-testnet.json").wasmPolicies, ...spec("spec.json").wasmPolicies] }], ["unread", undefined]]) {
+    assert.match(marketMismatch(s, DEFAULT_MARKET), /does not run the v3\.1 market policy .* does nothing on it/, why);
+  }
 });
 
 test("chain/spec-v31-testnet.json, the v3.1 market's draft spec, names chain/policy-v31.wasm by its own CID", () => {

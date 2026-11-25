@@ -3,7 +3,7 @@
 // owed for their paid time. A running seller then serves what is paid
 // itself (closing mode, host/sell-hosting.mjs); with no seller, or `--now`,
 // this rewrites the seller's fragment to the paid chains, or deletes it.
-import { reader } from "../client/market.mjs";
+import { marketMismatch, reader } from "../client/market.mjs";
 import { closeWrite, recordsBody, submit } from "../client/tx.mjs";
 import { sellerChains } from "./hearth.mjs";
 import { judgeOwn } from "./status.mjs";
@@ -21,6 +21,9 @@ export async function stop({ sdk, node, fetchImpl, rpc, privateKey, market, fee,
   const r = reader(sdk, node, { fetchImpl });
   const blockTime = Number((await r.api("/api/chain/spec", market)).targetBlockTime);
   let m = await r.market(market);
+  // Its verdicts decide what stays hosted: never on a market this version cannot read.
+  const wrong = marketMismatch(await r.spec(market), market);
+  if (wrong) throw new Error(wrong);
   const mine = () => [...m.offers].filter(([k]) => k.startsWith(`${self}/`)).map(([k, old]) => ({ id: k.slice(self.length + 1), old }));
   const closed = mine().map((o) => o.id);
   let tx, landed = true;

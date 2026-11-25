@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { TESTNET_MARKET, reader } from "../client/market.mjs";
-import { burnAddress, isHTTPS, isPath, pathFromNexus } from "../client/records.mjs";
+import { burnAddress, isHTTPS, isPath, parentOf, pathFromNexus } from "../client/records.mjs";
 import { submit } from "../client/tx.mjs";
 
 /** The market `hearth` sells on unless `--market` says (client/market.mjs). */
@@ -14,8 +14,9 @@ export const DEFAULT_MARKET = TESTNET_MARKET.path;
  * for one chain (`--price`), a period a day (`--period`), for chains of up
  * to 200,000 bytes a second of blocks (`--throughput`: the app's busy
  * preset, 1 MB blocks every 5 s) and 1 MB of state growth a block
- * (`--storage`), under Nexus (`--under`, repeated, adds parents). The
- * market pays 1,000 coin a block, a block a minute.
+ * (`--storage`), under the market's parent (`--under`, repeated, adds
+ * parents: testnet's market sells testnet chains). The market pays 1,000
+ * coin a block, a block a minute.
  */
 export const DEFAULT_TERMS = { price: "1000", period: "1d", throughput: "200000", storage: "1000000" };
 /** Why a host sells, as `hearth sell` says when it makes the seller's key. */
@@ -135,17 +136,18 @@ export function periodBlocks(text, targetBlockTime) {
  * The offer's terms from `hearth sell`'s flags, every one checked:
  * `{ price, period, throughput, storage, under, hashrate }`, `period` in
  * market blocks when `targetBlockTime` (the market's, ms) is given (else
- * checked only), `under` Nexus and each `--under`, sorted, each once,
+ * checked only), `under` the parent of `market` (the market's own parent,
+ * which its node hosts) and each `--under`, sorted, each once,
  * `hashrate` undefined unless `--hashrate` gives it (the miner measures it).
  */
-export function offerTerms({ price = DEFAULT_TERMS.price, period = DEFAULT_TERMS.period, throughput = DEFAULT_TERMS.throughput, storage = DEFAULT_TERMS.storage, under = [], hashrate }, targetBlockTime = 60000) {
+export function offerTerms({ price = DEFAULT_TERMS.price, period = DEFAULT_TERMS.period, throughput = DEFAULT_TERMS.throughput, storage = DEFAULT_TERMS.storage, under = [], market = DEFAULT_MARKET, hashrate }, targetBlockTime = 60000) {
   for (const path of under) if (!isPath(path) || !(path === "Nexus" || path.startsWith("Nexus/"))) throw new Error(`--under is a chain's path, Nexus or under it (e.g. Nexus/testnet), not ${path}`);
   return {
     price: whole(price, "--price", "market coin a period for one chain", 1n),
     period: periodBlocks(period, targetBlockTime),
     throughput: whole(throughput, "--throughput", "the largest block rate a chain may have, bytes a second (maxBlockSize ÷ targetBlockTime)"),
     storage: whole(storage, "--storage", "the largest state growth a chain may have, bytes a block (maxStateGrowth)"),
-    under: [...new Set(["Nexus", ...under])].sort(),
+    under: [...new Set([parentOf(market), ...under])].sort(),
     hashrate: hashrate === undefined ? undefined : whole(hashrate, "--hashrate", "hashes per second", 1n),
   };
 }

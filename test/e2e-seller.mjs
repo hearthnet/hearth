@@ -81,7 +81,7 @@ try {
   const keyFile = join(root, "hearth/seller.json");
   execFileSync("mkdir", ["-p", join(root, "hearth")]);
   writeFileSync(keyFile, keyFileJSON(sdk, host.privateKey), { mode: 0o600 });
-  const sellFlags = ["--price", "3", "--throughput", "20000", "--storage", "1000", "--period", "20", "--under", "Nexus/testnet", "--id", "small", "--root", root, "--market", MARKET, "--lattice", LATTICE,
+  const sellFlags = ["--price", "3", "--throughput", "20000", "--storage", "1000", "--period", "20", "--id", "small", "--root", root, "--market", MARKET, "--lattice", LATTICE,
     "--sponsor-bin", SPONSOR, "--sponsor-port", String(ports.sponsor), "--interval", "2", "--storage-budget", "64M"];
   const out = openSync(join(root, "seller.log"), "a");
   seller = spawn(process.execPath, [join(ROOT, "bin/hearth.mjs"), "sell", ...sellFlags], { stdio: ["ignore", out, out] });
@@ -91,7 +91,7 @@ try {
   const m0 = await until("the offer", async () => { const m = await r.market(MARKET); return m.offers.has(`${host.address}/small`) && m; }, 300);
   const offer = parseOffer(m0.offers.get(`${host.address}/small`));
   assert.equal(offer.blocks, sponsorKey.address, "the offer names the sponsor's key as where its blocks pay");
-  assert.deepEqual([offer.price, offer.throughput, offer.storage, offer.period, offer.under], [3n, 20000n, 1000n, 20n, ["Nexus", "Nexus/testnet"]]);
+  assert.deepEqual([offer.price, offer.throughput, offer.storage, offer.period, offer.under], [3n, 20000n, 1000n, 20n, ["Nexus/testnet"]]);
   assert.ok(offer.hashrate > 0n, "the hash rate its miner measured");
   assert.match(sellerLog(), /miner: \d+ hashes per second/);
   assert.match(sellerLog(), /the offer waits for the miner's first minute/);

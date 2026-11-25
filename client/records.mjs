@@ -8,7 +8,10 @@
 //                                                `renew <genesis CID>` to pay
 //                                                for more time on that genesis
 
-const ADDRESS = /^bafyrei[a-z2-7]{52}$/;
+// An account address in its one canonical spelling, as the policy's
+// `is_address`: base32 CIDv1 dag-cbor sha2-256, `bafyrei` then 52 characters,
+// the unused bits of the eighth (its top two, a-h) and the last (its low two) zero.
+const ADDRESS = /^bafyrei[a-h][a-z2-7]{50}[aeimquy4]$/;
 export const isAddress = (text) => typeof text === "string" && ADDRESS.test(text);
 
 /** A canonical unsigned decimal (no sign, no leading zero) as a BigInt, or undefined. */

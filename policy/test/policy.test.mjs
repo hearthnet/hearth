@@ -1,11 +1,13 @@
-// Runs the built policy module the way the Lattice host does (host.mjs).
-//
-//   cargo build --release --target wasm32-unknown-unknown
-//   node --test test/policy.test.mjs
+// Runs the committed policy module (chain/policy-v31.wasm, the build of
+// policy/src: see README.md) the way the Lattice host does (host.mjs).
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { context, validate } from "./host.mjs";
+import { readFileSync } from "node:fs";
+import * as sdk from "../../vendor/lattice-sdk.js";
 import { accountFromPrivateKey, encodeTransactionBody } from "../../vendor/lattice-sdk.js";
+import { isAddress, moduleCID } from "../../client/records.mjs";
+import { MARKET_POLICY } from "../../client/market.mjs";
 
 const key = (n) => accountFromPrivateKey(new Uint8Array(32).fill(n)).address;
 const HOST = key(1);
@@ -120,4 +122,22 @@ test("the policy reads an offer as client/records.mjs writes and parses it", asy
   const utf16 = text.split("\n").slice(0, 6).concat(["under Nexus", "under Nexus/\u{1F600}", "under Nexus/ｚ"]).join("\n");
   assert.equal(parseOffer(utf16), undefined);
   assert.ok(!accepts(order(utf16, "Nexus/app"), { credits: [[HOST, 50n]] }), "sorted by UTF-16 code units, not bytes");
+});
+
+test("the committed module is the one chain/spec-v31-testnet.json and client/market.mjs name", () => {
+  const cid = moduleCID(sdk, readFileSync(new URL("../../chain/policy-v31.wasm", import.meta.url)).toString("base64"));
+  const spec = JSON.parse(readFileSync(new URL("../../chain/spec-v31-testnet.json", import.meta.url), "utf8"));
+  assert.deepEqual(spec.wasmPolicies.map((p) => p.moduleCID), [cid]);
+  assert.equal(MARKET_POLICY, cid);
+});
+
+test("an address is read the same way here and in client/records.mjs: only its canonical spelling", () => {
+  const order = (payer) => [assertOffer(), { key: orderKey({ payer }), newValue: "{}" }];
+  const spell = (eighth, last) => `bafyrei${eighth}${"a".repeat(50)}${last}`;
+  for (const [address, canonical] of [[spell("a", "a"), true], [spell("h", "4"), true], [spell("i", "a"), false], [spell("a", "b"), false], [spell("a", "7"), false], [BUYER, true], [BUYER.slice(0, -1) + "b", false]]) {
+    assert.equal(isAddress(address), canonical, address);
+    assert.equal(accepts(order(address), { signers: [address], credits: [[HOST, 50n]] }), canonical, address);
+    const blocks = TERMS.replace(`blocks ${HOST}`, `blocks ${address}`);
+    assert.equal(accepts([{ key: offerKey(), oldValue: blocks, newValue: blocks }, { key: orderKey(), newValue: "{}" }], { credits: [[HOST, 50n]] }), canonical, `blocks ${address}`);
+  }
 });

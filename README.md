@@ -22,7 +22,10 @@ so it runs on a new testnet market chain, drafted in
 `chain/spec-v31-testnet.json` and not minted yet. Until it is, the default
 market (`TESTNET_MARKET` in `client/market.mjs`, one line) stays the v3
 market at `Nexus/testnet/hearth` (`chain/market-v3-testnet.json`), whose
-offers this version does not read. The mainnet market `Nexus/hearth`
+offers this version does not read. `hearth sell`, `stop` and `status` and
+the page read a market's spec first and refuse, saying so, any market whose
+policy is not exactly `chain/policy-v31.wasm` (`marketMismatch`), so this
+version never judges, unpins or writes on another. The mainnet market `Nexus/hearth`
 (`chain/market.json`) is the old one until it is launched again; this
 version of `hearth` does not sell on it.
 
@@ -77,7 +80,7 @@ period 1440           market blocks a period lasts
 throughput 200000     the largest block rate it takes: maxBlockSize / targetBlockTime, bytes a second
 storage 1000000       the largest maxStateGrowth it takes, bytes a block
 blocks bafyrei...     the address its blocks pay: its sponsor's key
-under Nexus           a parent it sells under: one line each, at least one, sorted, each once
+under Nexus/testnet   a parent it sells under: one line each, at least one, sorted, each once
 ```
 
 `--price` is whole market coin, at least 1; `--period` is market blocks,
@@ -87,10 +90,11 @@ rate is `--hashrate`, else what its miner measured over its first minute:
 the offer waits for it. A buyer pays the price for the chain it orders
 alone, which must be a direct child of one of the offer's `under` chains:
 running every chain above it is the host's cost, recovered through its
-price. The offer sells under `Nexus` and each `--under <path>` (repeat it;
-`Nexus/testnet` to sell testnet apps). The seller keeps each of them hosted
-(in its fragment, below) and writes no offer while its node does not serve
-one ("the offer waits until the node serves ..."). Leaving a parent out of `--under` stops new
+price. The offer sells under the market's parent (`Nexus/testnet` on the
+testnet market: test chains stay on testnet) and each `--under <path>`
+(repeat it). The seller keeps each of them hosted (in its fragment,
+below); the offer lists only those its node serves ("the node does not
+serve ..."), and is closed while it serves none. Leaving a parent out of `--under` stops new
 orders under it; chains already paid for stay owed. The seller rewrites
 the offer whenever the flags' terms or the address its blocks pay differ
 from what the market says (a measured hash rate is written once, not again
@@ -418,8 +422,8 @@ host stores rather than relays; a record of past uptime.
 
 ```
 cd policy && cargo test --lib && RUSTFLAGS="--remap-path-prefix=$HOME=/home --remap-path-prefix=$PWD=/hearth/policy" \
-  cargo build --release --target wasm32-unknown-unknown && node --test test/policy.test.mjs
-npm test                                                               # verdicts, hearth sell, the miner, launch, earn, burns, sell-coin
+  cargo build --release --target wasm32-unknown-unknown && cp target/wasm32-unknown-unknown/release/hostmarket_policy.wasm ../chain/policy-v31.wasm
+npm test                                                               # verdicts, hearth sell, the miner, launch, earn, burns, sell-coin, the committed policy module
 LATTICE=<lattice-node>/.build/debug/lattice SPONSOR=<lattice-sponsor>/.build/debug/lattice-sponsor \
   node test/e2e-seller.mjs                                             # hearth sell mines, writes its offer and sponsors; hearth stop
 ```

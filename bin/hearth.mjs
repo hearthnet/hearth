@@ -53,7 +53,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import * as sdk from "../vendor/lattice-sdk.js";
 import { keyFileJSON } from "../client/tx.mjs";
-import { reader } from "../client/market.mjs";
+import { marketMismatch, reader } from "../client/market.mjs";
 import { OWN_LIMIT, coinLines, exchangeOf, receiptsOf, sellCoin } from "../host/coin.mjs";
 import { DEFAULT_MARKET, DEFAULT_TERMS, WHY_SELL, offerTerms, DEFAULT_STORAGE_RATE, authedFetch, burn, burnChain, chainSync, checkRoot, checkSellFlags, ensureKey, findRoot,
   installedSeller, nodeSecret, nodeVersion, markClosing, markReopen, onPath, sponsorBooks, operatorRPC, parseAmount, rpcPort,
@@ -315,6 +315,8 @@ if (verb === "status") {
     }
     const n = reader(sdk, node, { fetchImpl });
     const m = await n.market(a.market);
+    const wrong = marketMismatch(await n.spec(a.market), a.market);
+    if (wrong) fail(wrong);
     const own = await judgeOwn({ sdk, m, self, market: a.market });
     const [seller, sponsor] = await Promise.all([n.account(a.market, self), n.account(a.market, sponsorAddress)]);
     console.log(report({ market: a.market, height: m.height, seller: { address: self, balance: seller.balance }, sponsor: { address: sponsorAddress, balance: sponsor.balance },

@@ -20,9 +20,11 @@
 // (--hashrate, else the rate its miner measured over its first minute, when
 // the offer is first written), the price of one chain a period, the period
 // in market blocks, the largest throughput and storage a chain may have, the
-// address its blocks pay, and the parents it sells under: Nexus and each
-// --under. It keeps each parent hosted (in its fragment, below) and writes
-// the offer only while its node serves every one. It writes the offer once its key
+// address its blocks pay, and the parents it sells under: the market's parent
+// and each --under. It keeps each parent hosted (in its fragment, below);
+// the offer lists only those its node serves, and is closed while it serves
+// none. It runs only on a market whose policy is the v3.1 one
+// (`marketMismatch`, client/market.mjs), and stops on any other. It writes the offer once its key
 // holds the fees of the offer and its close, and again, in place, whenever
 // its terms or that address change. Beside the node, until the key holds
 // them, the seller moves them from the sponsor key's block rewards before it
@@ -83,9 +85,9 @@ import { parseArgs } from "node:util";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const sdk = await import(join(HERE, "../vendor/lattice-sdk.js"));
-const { reader } = await import(join(HERE, "../client/market.mjs"));
+const { marketMismatch, reader } = await import(join(HERE, "../client/market.mjs"));
 const { formatOffer, isHTTPS, parseOffer } = await import(join(HERE, "../client/records.mjs"));
-const { offerWrite, recordsBody, submit, keyFileJSON } = await import(join(HERE, "../client/tx.mjs"));
+const { closeWrite, offerWrite, recordsBody, submit, keyFileJSON } = await import(join(HERE, "../client/tx.mjs"));
 const { ordered, sellerChains, fundingMessage, fundingStep, burn, burnChain, parseAmount, rpcPort, nodeSecret, authedFetch,
   nodeVersion, chainSync, ensureKey, operatorRPC, sellerFiles, startsReopened, parseSize, offerTerms, unservedParents, DEFAULT_STORAGE_RATE, DEFAULT_STORAGE_BUDGET } = await import(join(HERE, "hearth.mjs"));
 const { hostingList, judgeOwn, report, REMOTE_STORAGE } = await import(join(HERE, "status.mjs"));
@@ -194,18 +196,16 @@ let rateLine, underLine;
  * The offer to write now, or undefined: its terms from the flags (the
  * period at the market's block time), the hash rate --hashrate gives, else
  * the one on the market, else the miner's measured rate (none yet: it
- * waits), and the address its blocks pay. Undefined when the market already
- * says exactly that, or while its node does not serve a parent it would
- * sell under.
+ * waits), the address its blocks pay, and the parents it sells under that
+ * its node serves now. Undefined when the market already says exactly
+ * that; null (close it) when its node serves none of them.
  */
 async function nextOffer(old) {
   const missing = await unservedParents(node(), under);
-  if (missing.length) {
-    const line = `the offer waits until the node serves ${missing.join(", ")}: it sells only under chains its node runs`;
-    if (line !== underLine) log((underLine = line));
-    return undefined;
-  }
-  underLine = undefined;
+  const served = under.filter((p) => !missing.includes(p));
+  const line = missing.length ? `the node does not serve ${missing.join(", ")}: the offer sells under ${served.join(", ") || "nothing (closed)"} until it does` : undefined;
+  if (line !== underLine) { if (line) log(line); underLine = line; }
+  if (!served.length) return old === undefined ? undefined : null;
   const spec = await node().api("/api/chain/spec", marketPath);
   const terms = offerTerms(args, spec.targetBlockTime);
   const measured = BigInt(Math.round(mine?.rate() ?? 0));
@@ -215,13 +215,17 @@ async function nextOffer(old) {
     if (line !== rateLine) log((rateLine = line));
     return undefined;
   }
-  const offer = { hashrate, price: terms.price, period: terms.period, throughput: terms.throughput, storage: terms.storage, blocks: sponsorAddress, under: terms.under };
+  const offer = { hashrate, price: terms.price, period: terms.period, throughput: terms.throughput, storage: terms.storage, blocks: sponsorAddress, under: served };
   return formatOffer(offer) === old ? undefined : offer;
 }
 
 async function ensureOffer(m) {
   const old = m.offers.get(`${self}/${offerId}`);
   const offer = await nextOffer(old);
+  if (offer === null) {
+    log(`closing offer ${offerId}: its node serves none of the chains it sells under`, await send([closeWrite({ host: self, id: offerId, old })]));
+    return true;
+  }
   if (!offer) return false;
   log(`${old === undefined ? "writing" : "changing"} offer ${offerId}: ${formatOffer(offer).replaceAll("\n", ", ")}`, await send([offerWrite({ host: self, id: offerId, offer, old })]));
   return true;
@@ -242,7 +246,7 @@ async function ensureBurn() {
 
 // ---- one pass ----
 
-let checked = false, syncLine, sponsor, mine, funded = false, fundLine;
+let checked = false, marketRuns = false, syncLine, sponsor, mine, funded = false, fundLine;
 /** `<path> <genesis>` of each owed genesis the node has weighed, since this process started (`launchOwed`). */
 const launched = new Set();
 /** What its launches pinned on this market, beside its key: all it ever unpins. */
@@ -322,6 +326,12 @@ async function pass() {
   const m = await n.market(marketPath).catch((e) => {
     throw e.status === 404 ? Object.assign(new Error(`waiting for the node to host ${marketPath}`), { waiting: true }) : e;
   });
+  // Nothing is judged, funded, unpinned or written on a market this version cannot read.
+  if (!marketRuns) {
+    const wrong = marketMismatch(await n.spec(marketPath), marketPath);
+    if (wrong) throw Object.assign(new Error(wrong), { refused: true });
+    marketRuns = true;
+  }
   const open = [...m.offers.keys()].filter((k) => k.startsWith(`${self}/`));
   if (!ready) {
     // Its first write waits for its fee (`fund`); once its offer is out,
@@ -372,7 +382,7 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => {
 log(`selling hosting on ${marketPath} as ${self}`);
 for (;;) {
   try { await pass(); } catch (e) {
-    if (e.tooOld) { console.error(`hearth: ${e.message}`); quit(2); }
+    if (e.tooOld || e.refused) { console.error(`hearth: ${e.message}`); quit(2); }
     log(...(e.waiting ? [e.message] : ["pass failed:", e.message]));
   }
   if (args.once) break;
