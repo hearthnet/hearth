@@ -2,26 +2,22 @@
 // keys' balances, its orders and what they paid, the chains it owes, and
 // the storage its sponsor has pinned against its budget (its `/terms`).
 import { byLanding, judge } from "../client/verdict.mjs";
-import { chainReaders } from "../client/chains.mjs";
-import { parentOf, parseOrderValue } from "../client/records.mjs";
+import { parseOrderValue } from "../client/records.mjs";
 import { formatBytes } from "./hearth.mjs";
 
 /**
  * This seller's orders on the market `market` read `m`, judged as every
- * reader judges them, with the specs above each ordered path read as the
- * web app reads them (`chains`, client/chains.mjs: the node `n`, else the
- * nodes it lists): `{ mine, verdicts, owed, until, unsure, released,
+ * reader judges them: `{ mine, verdicts, owed, until, unsure, released,
  * counts, earned }`, `owed` mapping each chain owed now to the genesis the
  * first owed order there carries (`{ cid, volumes, modules, proofs }`, as
- * `parseOrderValue` reads it), `unsure` the paths with an order unpriced or
- * that could not be judged (it may be owed), `released` the Volumes and
- * modules of chains no longer owed that no chain owed now needs (none while
- * a path in `hosted`, those the seller hosts now, is unsure): what to unpin.
+ * `parseOrderValue` reads it), `unsure` the paths with an order that could
+ * not be judged (it may be owed), `released` the Volumes and modules of
+ * chains no longer owed that no chain owed now needs (none while a path in
+ * `hosted`, those the seller hosts now, is unsure): what to unpin.
  */
-export async function judgeOwn({ sdk, n, m, self, market, hosted = [], chains = chainReaders(sdk, n) }) {
+export async function judgeOwn({ sdk, m, self, market, hosted = [] }) {
   const mine = m.orders.filter((o) => o.host === self).sort(byLanding);
-  const specs = await chains.specsDownTo([...new Set(mine.map((o) => parentOf(o.path)))].filter(Boolean));
-  const verdicts = judge({ sdk, height: m.height, orders: mine, market, specs });
+  const verdicts = judge({ sdk, height: m.height, orders: mine, market });
   const owed = new Map(), until = new Map(), kept = new Set(), ended = new Set();
   for (const o of mine) {
     const v = verdicts.get(o.key);
@@ -35,7 +31,7 @@ export async function judgeOwn({ sdk, n, m, self, market, hosted = [], chains = 
   }
   const counts = {};
   for (const v of verdicts.values()) counts[v.kind] = (counts[v.kind] ?? 0) + 1;
-  const unsure = [...new Set(mine.filter((o) => { const v = verdicts.get(o.key); return v.kind === "unpriced" || v.reason?.startsWith("the order could not be judged"); }).map((o) => o.path))];
+  const unsure = [...new Set(mine.filter((o) => verdicts.get(o.key).reason?.startsWith("the order could not be judged")).map((o) => o.path))];
   // Nothing is released while a chain it hosts has an order that may be owed.
   const released = unsure.some((p) => hosted.includes(p)) ? [] : [...ended].filter((cid) => !kept.has(cid));
   return { mine, verdicts, owed, until, unsure, released, counts, earned: earnings({ self, mine, verdicts }) };
@@ -44,8 +40,8 @@ export async function judgeOwn({ sdk, n, m, self, market, hosted = [], chains = 
 /**
  * The chains the seller lists this pass: every path owed now (`owed`,
  * `judgeOwn`), and each it hosts now (`hosted`) that is `unsure`
- * (`judgeOwn`): only a lapse or a void drops a chain, never a spec not
- * read yet.
+ * (`judgeOwn`): only a lapse or a void drops a chain, never an order that
+ * could not be judged.
  */
 export function hostingList({ owed, unsure, hosted }) {
   return [...new Set([...owed.keys(), ...unsure.filter((p) => hosted.includes(p))])];

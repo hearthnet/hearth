@@ -5,8 +5,8 @@
 // listener, with an admin token; see README.md).
 //
 //   node host/sell-hosting.mjs (--root /var/lib/lattice | --node http://10.0.0.5:8090 --token-file token) \
-//     --market Nexus/testnet/hearth --key host.json [--id 1] [--throughput 60] [--storage 6] [--period 1d] \
-//     [--hashrate <hashes/s>] [--sponsor-bin lattice-sponsor] [--sponsor-port 8650] [--sponsor-url https://host.example/sponsor] \
+//     --market Nexus/testnet/hearth --key host.json [--id 1] [--price 1000] [--period 1d] [--throughput 200000] \
+//     [--storage 1000000] [--under <path>]... [--hashrate <hashes/s>] [--sponsor-bin lattice-sponsor] [--sponsor-port 8650] [--sponsor-url https://host.example/sponsor] \
 //     [--storage-rate 10240] [--lattice /usr/local/bin/lattice] [--interval 30] [--resume]
 //
 // It needs a node of Lattice 5.1.0 or newer, and says so otherwise. Each
@@ -16,10 +16,13 @@
 // It mines every chain the node hosts, all the time (host/pace.mjs), paid
 // to its sponsor's key, never to the seller's, and measures its hash rate.
 //
-// Its offer, `offer/<seller>/<id>`, is five lines: the hash rate (--hashrate,
-// else the rate its miner measured over its first minute, when the offer is
-// first written), the throughput and storage prices, the period in market
-// blocks, and the address its blocks pay. It writes the offer once its key
+// Its offer, `offer/<seller>/<id>` (client/records.mjs), is the hash rate
+// (--hashrate, else the rate its miner measured over its first minute, when
+// the offer is first written), the price of one chain a period, the period
+// in market blocks, the largest throughput and storage a chain may have, the
+// address its blocks pay, and the parents it sells under: Nexus and each
+// --under. It keeps each parent hosted (in its fragment, below) and writes
+// the offer only while its node serves every one. It writes the offer once its key
 // holds the fees of the offer and its close, and again, in place, whenever
 // its terms or that address change. Beside the node, until the key holds
 // them, the seller moves them from the sponsor key's block rewards before it
@@ -28,8 +31,9 @@
 // coin.
 //
 // Each pass, at the market's tip, it reads its own orders, judges them as
-// every reader does (client/verdict.mjs), and lists the market and exactly
-// the chains it owes, each with the chains above it, in its own fragment of
+// every reader does (client/verdict.mjs), and lists the market, the parents
+// it sells under and exactly the chains it owes, each with the chains above
+// it, in its own fragment of
 // the node's configuration, `hostmarket` (config.d/hostmarket.json): one
 // `PUT /config/fragments/hostmarket`, sent with the version it read
 // (`If-Match`, or `If-None-Match: *` when there was none). A chain whose paid
@@ -39,13 +43,11 @@
 // its launches pinned that the node did not pin already, listed in
 // `launch-pins-<market>.json` beside its key; never while a chain it hosts
 // has an order not judged yet). A chain it hosts with an order not judged
-// yet (a spec above it not read) stays listed. Each owed genesis it has
+// yet stays listed. Each owed genesis it has
 // not launched in this process it then pushes to the node from its order
 // (host/launch.mjs), every pass until the node weighs it, the path staying
 // hosted: when another genesis takes the path over at this host, it is
-// pushed too, and which chain the path runs is Lattice's fork choice. The
-// specs above each ordered path come from its node, else from the nodes its
-// node lists for the chain, as the web app reads them (client/chains.mjs).
+// pushed too, and which chain the path runs is Lattice's fork choice.
 // One node runs one seller: its unpinning knows only its own launches.
 //
 // Each pass prints both keys' balances, its orders, what they paid and what
@@ -82,11 +84,10 @@ import { parseArgs } from "node:util";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const sdk = await import(join(HERE, "../vendor/lattice-sdk.js"));
 const { reader } = await import(join(HERE, "../client/market.mjs"));
-const { chainReaders } = await import(join(HERE, "../client/chains.mjs"));
 const { formatOffer, isHTTPS, parseOffer } = await import(join(HERE, "../client/records.mjs"));
 const { offerWrite, recordsBody, submit, keyFileJSON } = await import(join(HERE, "../client/tx.mjs"));
 const { ordered, sellerChains, fundingMessage, fundingStep, burn, burnChain, parseAmount, rpcPort, nodeSecret, authedFetch,
-  nodeVersion, chainSync, ensureKey, operatorRPC, sellerFiles, startsReopened, parseSize, offerTerms, DEFAULT_STORAGE_RATE, DEFAULT_STORAGE_BUDGET } = await import(join(HERE, "hearth.mjs"));
+  nodeVersion, chainSync, ensureKey, operatorRPC, sellerFiles, startsReopened, parseSize, offerTerms, unservedParents, DEFAULT_STORAGE_RATE, DEFAULT_STORAGE_BUDGET } = await import(join(HERE, "hearth.mjs"));
 const { hostingList, judgeOwn, report, REMOTE_STORAGE } = await import(join(HERE, "status.mjs"));
 const { launchOwed, launchPins, launchPinsFile, unpin } = await import(join(HERE, "launch.mjs"));
 const { miner } = await import(join(HERE, "pace.mjs"));
@@ -96,7 +97,8 @@ const { values: args } = parseArgs({
   options: {
     root: { type: "string" }, node: { type: "string" }, "token-file": { type: "string" },
     market: { type: "string" }, key: { type: "string" }, id: { type: "string", default: "1" },
-    throughput: { type: "string" }, storage: { type: "string" }, period: { type: "string" }, hashrate: { type: "string" },
+    price: { type: "string" }, period: { type: "string" }, throughput: { type: "string" }, storage: { type: "string" }, hashrate: { type: "string" },
+    under: { type: "string", multiple: true },
     lattice: { type: "string", default: "lattice" },
     interval: { type: "string", default: "30" }, once: { type: "boolean", default: false }, fee: { type: "string" },
     burn: { type: "string" }, "burn-chain": { type: "string" },
@@ -115,7 +117,7 @@ if (args.node && !args["token-file"]) throw new Error("--node needs --token-file
 const root = args.root && resolve(args.root);
 const marketPath = args.market;
 const offerId = args.id;
-offerTerms(args);  // every term checked before anything runs
+const { under } = offerTerms(args);  // every term checked before anything runs
 const burnAmount = args.burn === undefined ? undefined : parseAmount(args.burn, "--burn");
 const burnOn = burnChain(args["burn-chain"] ?? marketPath, marketPath);
 const key = JSON.parse(readFileSync(args.key, "utf8"));
@@ -147,10 +149,6 @@ const authed = authedFetch(() => nodeSecret({ root, tokenFile: args.node && args
 const node = () => reader(sdk, rpcURL(), { fetchImpl: authed });
 
 const rpc = operatorRPC(rpcURL, authed);
-
-/** Spec reads, kept while the node's URL stays the same (client/chains.mjs). */
-let chains;
-const chainsOf = (n) => (chains?.url === n.node ? chains : (chains = { url: n.node, ...chainReaders(sdk, n) }));
 
 // ---- the seller's fragment of the node's configuration ----
 
@@ -191,15 +189,23 @@ async function send(actions) {
   return submit(sdk, rpcURL(), recordsBody({ signer: self, nonce, chainPath: marketPath.split("/"), actions, fee }), privateKey, authed);
 }
 
-let rateLine;
+let rateLine, underLine;
 /**
  * The offer to write now, or undefined: its terms from the flags (the
  * period at the market's block time), the hash rate --hashrate gives, else
  * the one on the market, else the miner's measured rate (none yet: it
  * waits), and the address its blocks pay. Undefined when the market already
- * says exactly that.
+ * says exactly that, or while its node does not serve a parent it would
+ * sell under.
  */
 async function nextOffer(old) {
+  const missing = await unservedParents(node(), under);
+  if (missing.length) {
+    const line = `the offer waits until the node serves ${missing.join(", ")}: it sells only under chains its node runs`;
+    if (line !== underLine) log((underLine = line));
+    return undefined;
+  }
+  underLine = undefined;
   const spec = await node().api("/api/chain/spec", marketPath);
   const terms = offerTerms(args, spec.targetBlockTime);
   const measured = BigInt(Math.round(mine?.rate() ?? 0));
@@ -209,7 +215,7 @@ async function nextOffer(old) {
     if (line !== rateLine) log((rateLine = line));
     return undefined;
   }
-  const offer = { hashrate, throughput: terms.throughput, storage: terms.storage, period: terms.period, blocks: sponsorAddress };
+  const offer = { hashrate, price: terms.price, period: terms.period, throughput: terms.throughput, storage: terms.storage, blocks: sponsorAddress, under: terms.under };
   return formatOffer(offer) === old ? undefined : offer;
 }
 
@@ -324,7 +330,7 @@ async function pass() {
     if (ready) startSponsor();
   }
   const hosted = (await readFragment()).fragment.hostedChains ?? [];
-  const judged = await judgeOwn({ sdk, n, m, self, market: marketPath, hosted, chains: chainsOf(n) });
+  const judged = await judgeOwn({ sdk, m, self, market: marketPath, hosted });
   const { owed } = judged;
   // What launching a chain no longer owed pinned, and no owed chain needs.
   try { for (const cid of await unpin({ rpc, released: judged.released, pinned })) log("unpinned", cid, "(no chain owed now needs it)"); }
@@ -345,9 +351,9 @@ async function pass() {
   // One write of its key's a pass: the burn waits for a pass with no offer write.
   const wrote = !closing && ready && await ensureOffer(m).catch((e) => { log("could not write the offer (will retry)", e.message); return false; });
 
-  // The market and every chain it hosts this pass, with the chains above
-  // each; then each owed genesis not launched yet.
-  try { await listInFragment(sellerChains({ market: marketPath, owed: listed })); }
+  // The market, the parents it sells under and every chain it hosts this
+  // pass, with the chains above each; then each owed genesis not launched yet.
+  try { await listInFragment(sellerChains({ market: marketPath, owed: listed, under })); }
   catch (e) { log("could not write the fragment (will retry)", e.message); }
   await launchOwed({ rpc, owed, launched, pinned, log });
   if (!wrote) await ensureBurn();

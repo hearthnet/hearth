@@ -6,7 +6,8 @@ import { createServer } from "node:http";
 import { test } from "node:test";
 import * as sdk from "../vendor/lattice-sdk.js";
 import { moduleCID } from "../client/records.mjs";
-import { DEFAULT_MARKET, markClosing, markReopen, nodeVersion, sellerChains, sellerFiles, sponsorBooks, startsReopened, sweep, sweepReserve, syncProgress } from "../host/hearth.mjs";
+import { TESTNET_MARKET } from "../client/market.mjs";
+import { DEFAULT_MARKET, unservedParents, markClosing, markReopen, nodeVersion, sellerChains, sellerFiles, sponsorBooks, startsReopened, sweep, sweepReserve, syncProgress } from "../host/hearth.mjs";
 import { miner } from "../host/pace.mjs";
 import { launch } from "../host/launch.mjs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -101,10 +102,17 @@ test("launch: pins every Volume and module of the genesis, then submits the gene
   await assert.rejects(launch({ rpc: rpc("tree"), path: "Nexus/testnet/app", genesis: { ...genesis, volumes: noBlock } }), /carries no block/);
 });
 
-test("the fragment lists the market and every owed chain, each with the chains above it, never Nexus", () => {
+test("the fragment lists the market, every owed chain and every parent it sells under, each with the chains above it, never Nexus", () => {
   assert.deepEqual(sellerChains({ market: DEFAULT_MARKET }), ["Nexus/testnet", DEFAULT_MARKET]);
   assert.deepEqual(sellerChains({ market: DEFAULT_MARKET, owed: ["Nexus/other/deep/app", "Nexus/b", "Nexus/testnet/a"] }),
     ["Nexus/b", "Nexus/other", "Nexus/testnet", "Nexus/other/deep", "Nexus/testnet/a", DEFAULT_MARKET, "Nexus/other/deep/app"], "any path, its ancestors first");
+  assert.deepEqual(sellerChains({ market: DEFAULT_MARKET, under: ["Nexus", "Nexus/x/y"] }), ["Nexus/testnet", "Nexus/x", DEFAULT_MARKET, "Nexus/x/y"], "the parents it sells under stay hosted");
+});
+
+test("the seller lists no parent its node does not serve", async () => {
+  const n = { api: async (route, path) => { if (route !== "/api/chain/info" || !["Nexus", "Nexus/testnet"].includes(path)) throw Object.assign(new Error("HTTP 404"), { status: 404 }); return {}; } };
+  assert.deepEqual(await unservedParents(n, ["Nexus", "Nexus/testnet"]), []);
+  assert.deepEqual(await unservedParents(n, ["Nexus", "Nexus/elsewhere", "Nexus/testnet/x"]), ["Nexus/elsewhere", "Nexus/testnet/x"]);
 });
 
 test("the node gates: GET /config says which layer lists each chain (Lattice 4.0.1), and a chain counts as synced once its tip is at the best header its peers showed", async () => {
@@ -131,9 +139,18 @@ test("chain/spec.json names chain/policy.wasm by its own CID, the module the old
 test("the default market is the v3 market on testnet, whose spec names chain/policy-v3.wasm by its own CID", () => {
   const market = JSON.parse(readFileSync(new URL("../chain/market-v3-testnet.json", import.meta.url), "utf8"));
   const spec = JSON.parse(readFileSync(new URL("../chain/spec-v3-testnet.json", import.meta.url), "utf8"));
+  assert.deepEqual(TESTNET_MARKET, { path: market.path, genesis: market.genesis });
   assert.equal(market.path, DEFAULT_MARKET);
-  assert.equal(market.moduleCID, moduleCID(sdk, MODULE), "the market runs this build of policy/src");
+  assert.equal(market.moduleCID, moduleCID(sdk, MODULE), "the market runs chain/policy-v3.wasm");
   assert.deepEqual(spec.wasmPolicies.map((p) => p.moduleCID), [market.moduleCID]);
+});
+
+test("chain/spec-v31-testnet.json, the v3.1 market's draft spec, names chain/policy-v31.wasm by its own CID", () => {
+  const spec = JSON.parse(readFileSync(new URL("../chain/spec-v31-testnet.json", import.meta.url), "utf8"));
+  const cid = moduleCID(sdk, readFileSync(new URL("../chain/policy-v31.wasm", import.meta.url)).toString("base64"));
+  assert.deepEqual(spec.wasmPolicies.map((p) => p.moduleCID), [cid]);
+  const v3 = JSON.parse(readFileSync(new URL("../chain/spec-v3-testnet.json", import.meta.url), "utf8"));
+  assert.deepEqual({ ...spec, wasmPolicies: [] }, { ...v3, wasmPolicies: [] }, "the v3 market's spec but for its policy");
 });
 
 test("`hearth earn` works for the sponsor's payouts until the address holds enough, waiting out 429s", async () => {

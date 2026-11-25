@@ -3,21 +3,21 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { reader } from "../client/market.mjs";
-import { burnAddress, isHTTPS, pathFromNexus } from "../client/records.mjs";
+import { TESTNET_MARKET, reader } from "../client/market.mjs";
+import { burnAddress, isHTTPS, isPath, pathFromNexus } from "../client/records.mjs";
 import { submit } from "../client/tx.mjs";
 
-/** The v3 market (chain/market-v3-testnet.json), on testnet. */
-export const DEFAULT_MARKET = "Nexus/testnet/hearth";
+/** The market `hearth` sells on unless `--market` says (client/market.mjs). */
+export const DEFAULT_MARKET = TESTNET_MARKET.path;
 /**
- * What `hearth sell` sells at unless its flags say: market coin per period
- * for each kB/s of block capacity (`--throughput`) and each kB of state
- * growth a block may add (`--storage`), a period a day (`--period`). A
- * small chain (20 kB blocks every 30 s, 10 kB of state growth) costs
- * 4,000 + 6,000 = 10,000 a day, each chain on the path priced by its own
- * spec. The market pays 1,000 coin a block, a block a minute.
+ * What `hearth sell` sells at unless its flags say: market coin a period
+ * for one chain (`--price`), a period a day (`--period`), for chains of up
+ * to 200,000 bytes a second of blocks (`--throughput`: the app's busy
+ * preset, 1 MB blocks every 5 s) and 1 MB of state growth a block
+ * (`--storage`), under Nexus (`--under`, repeated, adds parents). The
+ * market pays 1,000 coin a block, a block a minute.
  */
-export const DEFAULT_TERMS = { throughput: "60", storage: "6", period: "1d" };
+export const DEFAULT_TERMS = { price: "1000", period: "1d", throughput: "200000", storage: "1000000" };
 /** Why a host sells, as `hearth sell` says when it makes the seller's key. */
 export const WHY_SELL = "You earn Hearth coin (the market's coin): buyers' orders pay the seller's key, and the blocks it makes pay its sponsor's key "
   + "(hearth sweep moves them to the seller's). Spend it on hosting from any seller on the market.";
@@ -41,11 +41,21 @@ const depth = (path) => path.split("/").length;
 export const ordered = (paths) => [...new Set(paths)].sort((a, b) => depth(a) - depth(b) || (a < b ? -1 : 1));
 
 /**
- * The chains the seller's fragment lists: the market and each chain it
- * owes, each with every chain above it but Nexus (the node always hosts
- * Nexus), parents first.
+ * The chains the seller's fragment lists: the market, each chain it owes and
+ * each it sells under (`under`), each with every chain above it but Nexus
+ * (the node always hosts Nexus), parents first.
  */
-export const sellerChains = ({ market, owed = [] }) => ordered([market, ...owed].flatMap(pathFromNexus)).filter((p) => p !== "Nexus");
+export const sellerChains = ({ market, owed = [], under = [] }) => ordered([market, ...owed, ...under].flatMap(pathFromNexus)).filter((p) => p !== "Nexus");
+
+/**
+ * Of the parents an offer sells under (`under`), those the node `n` (a
+ * `reader`) does not serve: the seller writes no offer while there is one.
+ */
+export async function unservedParents(n, under) {
+  const missing = [];
+  for (const path of under) await n.api("/api/chain/info", path).catch(() => missing.push(path));
+  return missing;
+}
 
 /**
  * What to tell the operator while the key holds less than it needs, or
@@ -123,15 +133,19 @@ export function periodBlocks(text, targetBlockTime) {
 
 /**
  * The offer's terms from `hearth sell`'s flags, every one checked:
- * `{ throughput, storage, period, hashrate }`, `period` in market blocks
- * when `targetBlockTime` (the market's, ms) is given (else checked only),
+ * `{ price, period, throughput, storage, under, hashrate }`, `period` in
+ * market blocks when `targetBlockTime` (the market's, ms) is given (else
+ * checked only), `under` Nexus and each `--under`, sorted, each once,
  * `hashrate` undefined unless `--hashrate` gives it (the miner measures it).
  */
-export function offerTerms({ throughput = DEFAULT_TERMS.throughput, storage = DEFAULT_TERMS.storage, period = DEFAULT_TERMS.period, hashrate }, targetBlockTime = 60000) {
+export function offerTerms({ price = DEFAULT_TERMS.price, period = DEFAULT_TERMS.period, throughput = DEFAULT_TERMS.throughput, storage = DEFAULT_TERMS.storage, under = [], hashrate }, targetBlockTime = 60000) {
+  for (const path of under) if (!isPath(path) || !(path === "Nexus" || path.startsWith("Nexus/"))) throw new Error(`--under is a chain's path, Nexus or under it (e.g. Nexus/testnet), not ${path}`);
   return {
-    throughput: whole(throughput, "--throughput", "market coin per kB/s of block capacity per period"),
-    storage: whole(storage, "--storage", "market coin per kB of state growth per period"),
+    price: whole(price, "--price", "market coin a period for one chain", 1n),
     period: periodBlocks(period, targetBlockTime),
+    throughput: whole(throughput, "--throughput", "the largest block rate a chain may have, bytes a second (maxBlockSize ÷ targetBlockTime)"),
+    storage: whole(storage, "--storage", "the largest state growth a chain may have, bytes a block (maxStateGrowth)"),
+    under: [...new Set(["Nexus", ...under])].sort(),
     hashrate: hashrate === undefined ? undefined : whole(hashrate, "--hashrate", "hashes per second", 1n),
   };
 }

@@ -4,6 +4,14 @@
 import { get, list, volumeLoader } from "./state.mjs";
 import { offerKey, parseOfferKey, parseOrderKey } from "./records.mjs";
 
+/**
+ * The testnet market the web app and `hearth` use unless told otherwise:
+ * its path and genesis. Now the v3 market (chain/market-v3-testnet.json);
+ * the v3.1 market (chain/spec-v31-testnet.json, whose policy reads offers
+ * as client/records.mjs does) takes its place here once its genesis is minted.
+ */
+export const TESTNET_MARKET = { path: "Nexus/testnet/hearth", genesis: "bafyreidrzde55u53grvbfs4woibgygtrex3blzdre4ibqkwlorv7x346ke" };
+
 /** Where receipt state keeps a receipt: a domain-separated SHA-256 of its key, in hex. */
 export async function receiptStorageKey(key) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`lattice/receipt-state/v1\u0000${key}`));
@@ -107,13 +115,6 @@ export function reader(sdk, node, { fetchImpl = (...a) => fetch(...a), cache } =
         orders.push({ key, ...ref, value, landed, terms });
       }
       return { height: t.height, hash: t.hash, offers, orders };
-    },
-
-    /** The spec `chainPath` runs, from its tip block by CID, or undefined when the node holds no such chain. */
-    async spec(chainPath) {
-      let t;
-      try { t = await tip(chainPath); } catch (e) { if (e.status === 404 || e.status === 400) return undefined; throw e; }
-      return (await load(t.block.specCID, t.volume)).node;
     },
 
     /**

@@ -27,11 +27,13 @@ test("--period is market blocks, or hours, days or weeks at the market's block t
   for (const bad of ["0", "1m", "day", "1.5d", "-1d", "d", "9007199254740992", "", undefined]) assert.throws(() => periodBlocks(bad, 60000), /--period/, String(bad));
 });
 
-test("the offer's terms from flags: prices per period, the period in market blocks, a hash rate only when given", () => {
-  assert.deepEqual(offerTerms({}), { throughput: 60n, storage: 6n, period: 1440n, hashrate: undefined }, "the defaults, a day of one-minute blocks");
-  assert.deepEqual(DEFAULT_TERMS, { throughput: "60", storage: "6", period: "1d" });
-  assert.deepEqual(offerTerms({ throughput: "0", storage: "7", period: "12h", hashrate: "5000000" }, 3000), { throughput: 0n, storage: 7n, period: 14400n, hashrate: 5000000n });
-  for (const [flag, bad] of [["throughput", "-1"], ["throughput", "1.5"], ["storage", "x"], ["storage", "01"], ["hashrate", "0"], ["hashrate", "9007199254740992"], ["period", "1y"]]) {
+test("the offer's terms from flags: a price per period, the period in market blocks, limits, parents under Nexus, a hash rate only when given", () => {
+  assert.deepEqual(offerTerms({}), { price: 1000n, period: 1440n, throughput: 200000n, storage: 1000000n, under: ["Nexus"], hashrate: undefined }, "the defaults, a day of one-minute blocks");
+  assert.deepEqual(DEFAULT_TERMS, { price: "1000", period: "1d", throughput: "200000", storage: "1000000" });
+  assert.deepEqual(offerTerms({ price: "7", throughput: "0", storage: "7", period: "12h", under: ["Nexus/testnet", "Nexus/a", "Nexus/testnet"], hashrate: "5000000" }, 3000),
+    { price: 7n, period: 14400n, throughput: 0n, storage: 7n, under: ["Nexus", "Nexus/a", "Nexus/testnet"], hashrate: 5000000n }, "Nexus always; each parent once, sorted");
+  for (const [flag, bad] of [["price", "0"], ["price", "1.5"], ["throughput", "-1"], ["throughput", "1.5"], ["storage", "x"], ["storage", "01"], ["hashrate", "0"], ["hashrate", "9007199254740992"], ["period", "1y"],
+    ["under", ["Other"]], ["under", ["Nexus/"]], ["under", ["Nexus//a"]], ["under", [""]]]) {
     assert.throws(() => offerTerms({ [flag]: bad }), new RegExp(`--${flag}`), `${flag} ${bad}`);
   }
 });
@@ -367,7 +369,7 @@ test("every verb takes --help", async () => {
     assert.match(out, new RegExp(`^usage: hearth ${verb} `), verb);
   }
   const sellHelp = (await hearth(["sell", "-h"])).out;
-  assert.match(sellHelp, /--throughput 60\] \[--storage 6\] \[--period 1d\] \[--hashrate <hashes\/s>\]/);
+  assert.match(sellHelp, /--price 1000\] \[--period 1d\] \[--throughput 200000\] \[--storage 1000000\]\s+\[--under <path>\]\.\.\. \[--hashrate <hashes\/s>\]/);
   assert.match(sellHelp, /--storage-budget 256M/);
   assert.match((await hearth(["status", "-h"])).out, /--sponsor-port 8650/);
 });
@@ -376,7 +378,7 @@ test("a bad flag is refused before `hearth sell` writes anything", async () => {
   const node = await freshNode();
   try {
     for (const bad of [["--throughput", "x"], ["--storage", "-1"], ["--period", "1m"], ["--period", "0"], ["--hashrate", "0"], ["--id", "a/b"], ["--storage-budget", "lots"],
-      ["--sponsor-url", "http://host.example"], ["--interval", "0"], ["--burn", "x"], ["--storage-rate", "1.5"], ["--price", "100/day"], ["--url", "https://host.example"],
+      ["--sponsor-url", "http://host.example"], ["--interval", "0"], ["--burn", "x"], ["--storage-rate", "1.5"], ["--price", "100/day"], ["--price", "0"], ["--under", "Other/x"], ["--url", "https://host.example"],
       ["--offer", "offer.json"], ["--parent", "Nexus"], ["--storage-offer", "storage.json"]]) {
       const { code, out } = await hearth(["sell", ...bad, "--root", node.root, "--once", "--lattice", node.lattice, "--sponsor-bin", node.sponsor]);
       assert.equal(code, 2, `${bad.join(" ")}: ${out}`);
@@ -456,7 +458,7 @@ test("`hearth sell` alone sells at the default terms, and its first run says wha
     const first = await run();
     assert.equal(first.code, 0, first.out);
     assert.match(first.out, /You earn Hearth coin \(the market's coin\): buyers' orders pay the seller's key, and the blocks it makes pay its sponsor's key .*Spend it on hosting from any seller on the market\./);
-    assert.match(first.out, /offer 1: 60 market coin per kB\/s of block capacity and 6 per kB of state growth, per 1d, for each chain on a buyer's path; the hash rate its miner measures/);
+    assert.match(first.out, /offer 1: 1000 market coin per 1d for one chain under Nexus, of up to 200000 bytes a second of blocks and 1000000 bytes of state growth a block; the hash rate its miner measures/);
     const again = await run();
     assert.doesNotMatch(again.out, /You earn Hearth coin/, "said once, when the key is made");
   } finally { node.close(); }

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Hearth's seller in one command:
 //
-//   npx @hearthnet/hearth sell [--throughput 60] [--storage 6] [--period 1d] [--hashrate <n>]
+//   npx @hearthnet/hearth sell [--price 1000] [--period 1d] [--throughput 200000] [--storage 1000000] [--under <path>]... [--hashrate <n>]
 //
 // finds the Lattice node beside it (5.1.0 or newer), makes the seller's key
 // if there is none, and runs host/sell-hosting.mjs in the foreground, which
@@ -55,7 +55,7 @@ import * as sdk from "../vendor/lattice-sdk.js";
 import { keyFileJSON } from "../client/tx.mjs";
 import { reader } from "../client/market.mjs";
 import { OWN_LIMIT, coinLines, exchangeOf, receiptsOf, sellCoin } from "../host/coin.mjs";
-import { DEFAULT_MARKET, DEFAULT_TERMS, WHY_SELL, DEFAULT_STORAGE_RATE, authedFetch, burn, burnChain, chainSync, checkRoot, checkSellFlags, ensureKey, findRoot,
+import { DEFAULT_MARKET, DEFAULT_TERMS, WHY_SELL, offerTerms, DEFAULT_STORAGE_RATE, authedFetch, burn, burnChain, chainSync, checkRoot, checkSellFlags, ensureKey, findRoot,
   installedSeller, nodeSecret, nodeVersion, markClosing, markReopen, onPath, sponsorBooks, operatorRPC, parseAmount, rpcPort,
   sellerFiles, serviceUnits, sweep, waitSynced } from "../host/hearth.mjs";
 import { sponsorAnswers, sponsorBinary, sponsorStorage, unpin } from "../host/sponsor.mjs";
@@ -70,7 +70,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const { name, version } = JSON.parse(readFileSync(join(HERE, "../package.json"), "utf8"));
 const NODE = "[--root <node root> | --node <url> --token-file <file>] [--key <file>] [--lattice <path>]";
 const VERBS = {
-  sell: `hearth sell [--throughput ${DEFAULT_TERMS.throughput}] [--storage ${DEFAULT_TERMS.storage}] [--period ${DEFAULT_TERMS.period}] [--hashrate <hashes/s>] [--id 1]
+  sell: `hearth sell [--price ${DEFAULT_TERMS.price}] [--period ${DEFAULT_TERMS.period}] [--throughput ${DEFAULT_TERMS.throughput}] [--storage ${DEFAULT_TERMS.storage}]
+                   [--under <path>]... [--hashrate <hashes/s>] [--id 1]
                    [--public | --key-only] [--market ${DEFAULT_MARKET}] ${NODE}
                    [--interval 30] [--fee <n>] [--once]
                    [--sponsor-bin <path>] [--sponsor-port 8650] [--sponsor-url <https url>]
@@ -101,6 +102,7 @@ try { parsed = parseArgs({
     id: { type: "string" }, public: { type: "boolean" }, "key-only": { type: "boolean" },
     lattice: { type: "string" }, interval: { type: "string", default: "30" }, "storage-budget": { type: "string" }, once: { type: "boolean", default: false }, fee: { type: "string" },
     throughput: { type: "string" }, storage: { type: "string" }, period: { type: "string" }, hashrate: { type: "string" }, price: { type: "string" },
+    under: { type: "string", multiple: true },
     install: { type: "boolean", default: false }, resume: { type: "boolean", default: false }, float: { type: "string", default: "100" },
     burn: { type: "string" }, "burn-chain": { type: "string" }, chain: { type: "string" },
     "sponsor-bin": { type: "string" }, "sponsor-port": { type: "string" }, "sponsor-url": { type: "string" }, "storage-rate": { type: "string" },
@@ -313,7 +315,7 @@ if (verb === "status") {
     }
     const n = reader(sdk, node, { fetchImpl });
     const m = await n.market(a.market);
-    const own = await judgeOwn({ sdk, n, m, self, market: a.market });
+    const own = await judgeOwn({ sdk, m, self, market: a.market });
     const [seller, sponsor] = await Promise.all([n.account(a.market, self), n.account(a.market, sponsorAddress)]);
     console.log(report({ market: a.market, height: m.height, seller: { address: self, balance: seller.balance }, sponsor: { address: sponsorAddress, balance: sponsor.balance },
       ...own, storage: root ? await sponsorStorage(a["sponsor-port"] ?? "8650") : REMOTE_STORAGE }).join("\n"));
@@ -442,7 +444,6 @@ if (verb === "earn") {
 
 try {
   // Every flag checked, and the node found, before anything is written.
-  if (a.price !== undefined) fail("--price is gone: an offer prices throughput and storage (--throughput, --storage, per --period)");
   checkSellFlags(a);
   // The node: remote with --node, else its root.
   const root = await nodeRoot({ create: true, install: a.install });
@@ -474,9 +475,9 @@ try {
     console.log(`public at ${tunnel.url}: the node's public read port, and its sponsor at /sponsor (a Cloudflare quick tunnel to this machine: a new URL each start)`);
   }
 
-  const t = { ...DEFAULT_TERMS, ...Object.fromEntries(["throughput", "storage", "period", "hashrate"].filter((k) => a[k] !== undefined).map((k) => [k, a[k]])) };
-  console.log(`offer ${a.id ?? "1"}: ${t.throughput} market coin per kB/s of block capacity and ${t.storage} per kB of state growth, per ${t.period}, `
-    + "for each chain on a buyer's path; " + (t.hashrate ? `${t.hashrate} hashes per second` : "the hash rate its miner measures"));
+  const t = { ...DEFAULT_TERMS, ...Object.fromEntries(["price", "period", "throughput", "storage", "hashrate"].filter((k) => a[k] !== undefined).map((k) => [k, a[k]])) };
+  console.log(`offer ${a.id ?? "1"}: ${t.price} market coin per ${t.period} for one chain under ${offerTerms(a).under.join(", ")}, `
+    + `of up to ${t.throughput} bytes a second of blocks and ${t.storage} bytes of state growth a block; ` + (t.hashrate ? `${t.hashrate} hashes per second` : "the hash rate its miner measures"));
   if (a.burn) {
     console.log(`burns until ${a.burn} is burned for ${address} on ${burnChain(a["burn-chain"] ?? a.market, a.market)}, once`);
   }
@@ -485,7 +486,8 @@ try {
   const pass = (flag) => (a[flag] === undefined ? [] : [`--${flag}`, a[flag]]);
   const sponsorBin = a["sponsor-bin"]?.includes("/") ? ["--sponsor-bin", resolve(a["sponsor-bin"])] : pass("sponsor-bin");
   const sellArgs = [...where, "--market", a.market, "--key", key,
-    ...pass("id"), ...pass("throughput"), ...pass("storage"), ...pass("period"), ...pass("hashrate"), ...pass("fee"), ...pass("burn"), ...pass("burn-chain"),
+    ...pass("id"), ...pass("price"), ...pass("period"), ...pass("throughput"), ...pass("storage"), ...(a.under ?? []).flatMap((p) => ["--under", p]),
+    ...pass("hashrate"), ...pass("fee"), ...pass("burn"), ...pass("burn-chain"),
     ...sponsorBin, ...pass("sponsor-port"), ...pass("sponsor-url"), ...pass("storage-rate"), ...pass("storage-budget"),
     "--interval", a.interval, ...(a.once ? ["--once"] : []), ...(a.resume ? ["--resume"] : [])];
 
