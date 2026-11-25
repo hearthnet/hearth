@@ -193,10 +193,10 @@ agents on macOS (`~/Library/LaunchAgents/net.hearth.node.plist` and
 `net.hearth.seller.plist`; launchd has no ordering, so the seller waits for
 the node itself). The node is started again after a failure exit, which
 a restart is, but stays down after a clean stop and after exit 78
-(an invalid configuration; launchd cannot exempt one exit status, so the
-node's agent runs it under `/bin/sh`, which exits 0 for 78). The seller is
-started again after a failure, not after it exits 0 (when `hearth stop` has
-nothing paid left to serve). The units name no `network-online.target`,
+(an invalid configuration). The seller is started again after a failure,
+not after it exits 0 (when `hearth stop` has nothing paid left to serve)
+nor after exit 78 (a market it refuses). launchd cannot exempt one exit
+status, so both agents run under `/bin/sh`, which exits 0 for 78. The units name no `network-online.target`,
 which a user's service manager does not have. It loads nothing itself and prints the exact commands that do. On
 Linux they start with `loginctl enable-linger $USER`, which keeps them
 running without a login. A launch agent runs while you are logged in; for

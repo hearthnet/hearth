@@ -128,12 +128,15 @@ test("--install writes units for the node and the seller, the seller after the n
   assert.ok(mac.units[0].content.includes("<key>Label</key><string>net.hearth.node</string>") && mac.units[0].content.includes("<string>up</string>"));
   for (const unit of mac.units) assert.ok(unit.content.includes("<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>"), "down after `lattice down`, and after the seller's last paid chain");
   assert.ok(mac.units[1].content.includes("<key>Label</key><string>net.hearth.seller</string>") && mac.units[1].content.includes("<string>/srv/my node</string>"));
-  // launchd cannot exempt exit 78: the node runs under /bin/sh, which exits 0 for it.
-  const argv = [...mac.units[0].content.matchAll(/<string>([^<]*)<\/string>/g)].map((m) => m[1].replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&").replace(/&gt;/g, ">"));
-  const sh = argv.slice(argv.indexOf("/bin/sh"), argv.indexOf("up") + 3);
-  assert.deepEqual(sh.slice(4), ["/usr/local/bin/lattice", "up", "--root", "/srv/my node"]);
+  // launchd cannot exempt exit 78: the node and the seller run under /bin/sh, which exits 0 for it.
+  const programArguments = (unit) => [...unit.content.split("<key>ProgramArguments</key>")[1].split("</array>")[0].matchAll(/<string>([^<]*)<\/string>/g)]
+    .map((m) => m[1].replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&").replace(/&gt;/g, ">"));
+  const [nodeArgv, sellerArgv] = mac.units.map(programArguments);
+  assert.deepEqual(nodeArgv.slice(4), nodeCommand);
+  assert.deepEqual(sellerArgv.slice(4), command);
+  assert.deepEqual(sellerArgv.slice(0, 4), [...nodeArgv.slice(0, 3), "hearth-sell"], "the seller under the same wrapper");
   for (const [code, exits] of [[78, 0], [75, 75], [1, 1], [0, 0]]) {
-    const r = spawnSync(sh[0], [sh[1], sh[2], sh[3], "/bin/sh", "-c", `exit ${code}`]);
+    const r = spawnSync(sellerArgv[0], [...sellerArgv.slice(1, 4), "/bin/sh", "-c", `exit ${code}`]);
     assert.equal(r.status, exits, `exit ${code}`);
   }
   assert.equal(mac.load, "launchctl bootstrap gui/$(id -u) /home/h/Library/LaunchAgents/net.hearth.node.plist && launchctl bootstrap gui/$(id -u) /home/h/Library/LaunchAgents/net.hearth.seller.plist");

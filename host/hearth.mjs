@@ -384,10 +384,10 @@ const systemdWord = (s) => {
  *
  * The node is restarted as `lattice up` asks: on a failure exit, which
  * includes 75 (`lattice restart`), but not 0 (`lattice down`) nor 78 (an
- * invalid configuration). launchd cannot exempt one exit status, so its
- * agent runs the node under `/bin/sh`, which exits 0 for 78. The seller is
- * restarted on a failure, not when it exits 0 (after `hearth stop`, once
- * nothing paid is left).
+ * invalid configuration). The seller is restarted on a failure, not when it
+ * exits 0 (after `hearth stop`, once nothing paid is left) nor 78 (a market
+ * it refuses). launchd cannot exempt one exit status, so its agents run both
+ * under `/bin/sh`, which exits 0 for 78.
  */
 export function serviceUnits({ platform, home, command, nodeCommand, path }) {
   if (platform === "linux") {
@@ -450,7 +450,7 @@ ${argv.map((a) => `    <string>${xml(a)}</string>`).join("\n")}
     const units = [
       ...(nodeCommand ? [agent("net.hearth.node", ["/bin/sh", "-c", EXIT_78_IS_0, "lattice-up", ...nodeCommand],
         "hearth-node.log", ONLY_ON_FAILURE)] : []),
-      agent("net.hearth.seller", command, "hearth.log", ONLY_ON_FAILURE),
+      agent("net.hearth.seller", ["/bin/sh", "-c", EXIT_78_IS_0, "hearth-sell", ...command], "hearth.log", ONLY_ON_FAILURE),
     ];
     return {
       units,
