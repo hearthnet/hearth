@@ -41,11 +41,11 @@ const account = () => { const privateKey = sdk.generatePrivateKey(); return { pr
 const [miner, bank, host] = [account(), account(), account()];
 const r = reader(sdk, node);
 const hearth = (...args) => new Promise((ok) => execFile(process.execPath, [join(ROOT, "bin/hearth.mjs"), ...args], { encoding: "utf8" }, (e, out, err) => ok({ code: e?.code ?? 0, out: out + err })));
-/** The v3 market's spec (chain/spec-v3-testnet.json, with `overrides`) and policy, as `lattice child create` takes them. */
+/** The v3.1 market's spec (chain/spec-v31-testnet.json, with `overrides`) and policy, as `lattice child create` takes them. */
 function marketArgs(overrides) {
   const file = join(root, "market-spec.json");
-  writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(join(ROOT, "chain/spec-v3-testnet.json"), "utf8")), ...overrides }));
-  return ["--spec", file, "--policy-module", join(ROOT, "chain/policy-v3.wasm"), "--premine-to", bank.address];
+  writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(join(ROOT, "chain/spec-v31-testnet.json"), "utf8")), ...overrides }));
+  return ["--spec", file, "--policy-module", join(ROOT, "chain/policy-v31.wasm"), "--premine-to", bank.address];
 }
 
 async function until(label, condition, seconds = 600) {
@@ -81,7 +81,7 @@ try {
   const keyFile = join(root, "hearth/seller.json");
   execFileSync("mkdir", ["-p", join(root, "hearth")]);
   writeFileSync(keyFile, keyFileJSON(sdk, host.privateKey), { mode: 0o600 });
-  const sellFlags = ["--throughput", "3", "--storage", "1", "--period", "20", "--id", "small", "--root", root, "--market", MARKET, "--lattice", LATTICE,
+  const sellFlags = ["--price", "3", "--throughput", "20000", "--storage", "1000", "--period", "20", "--id", "small", "--root", root, "--market", MARKET, "--lattice", LATTICE,
     "--sponsor-bin", SPONSOR, "--sponsor-port", String(ports.sponsor), "--interval", "2", "--storage-budget", "64M"];
   const out = openSync(join(root, "seller.log"), "a");
   seller = spawn(process.execPath, [join(ROOT, "bin/hearth.mjs"), "sell", ...sellFlags], { stdio: ["ignore", out, out] });
@@ -91,7 +91,7 @@ try {
   const m0 = await until("the offer", async () => { const m = await r.market(MARKET); return m.offers.has(`${host.address}/small`) && m; }, 300);
   const offer = parseOffer(m0.offers.get(`${host.address}/small`));
   assert.equal(offer.blocks, sponsorKey.address, "the offer names the sponsor's key as where its blocks pay");
-  assert.deepEqual([offer.throughput, offer.storage, offer.period], [3n, 1n, 20n]);
+  assert.deepEqual([offer.price, offer.throughput, offer.storage, offer.period, offer.under], [3n, 20000n, 1000n, 20n, ["Nexus/testnet"]]);
   assert.ok(offer.hashrate > 0n, "the hash rate its miner measured");
   assert.match(sellerLog(), /miner: \d+ hashes per second/);
   assert.match(sellerLog(), /the offer waits for the miner's first minute/);

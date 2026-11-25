@@ -3,10 +3,8 @@
 import { readFileSync } from "node:fs";
 
 let built;
-/** The built market policy, read when first used, so `context` needs no build. */
-export const module = () => (built ??= new WebAssembly.Module(
-  readFileSync(new URL("../target/wasm32-unknown-unknown/release/hostmarket_policy.wasm", import.meta.url)),
-));
+/** The market policy as committed (chain/policy-v31.wasm, the build of policy/src), read when first used. */
+export const module = () => (built ??= new WebAssembly.Module(readFileSync(new URL("../../chain/policy-v31.wasm", import.meta.url))));
 
 function u32(value) {
   const bytes = new Uint8Array(4);

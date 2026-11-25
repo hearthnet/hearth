@@ -8,13 +8,13 @@ import { base64, chainSpec, mintGenesis } from "../app/genesis.mjs";
 import { formatOrderValue, moduleCID, parseOrderValue } from "../client/records.mjs";
 
 const { buildChildGenesis } = await loadGenesis(readFileSync(new URL("../vendor/lattice-genesis.wasm", import.meta.url)));
-export const MODULE = readFileSync(new URL("../chain/policy-v3.wasm", import.meta.url)).toString("base64");
+export const MODULE = readFileSync(new URL("../chain/policy-v31.wasm", import.meta.url)).toString("base64");
 export const MODULE_CID = moduleCID(sdk, MODULE);
 /** 1 MB blocks every 60 s, 1 MB state growth. */
 export const SIZES = { maxBlockSize: 1000000, targetBlockTime: 60000, maxStateGrowth: 1000000, maxNumberOfTransactionsPerBlock: 1000 };
 const PARENT_STATE = "bafyreidrzde55u53grvbfs4woibgygtrex3blzdre4ibqkwlorv7x346ke";
 
-/** `{ cid, value }`: the genesis of `path` and the order value carrying it, with the policy-v3 module. */
+/** `{ cid, value }`: the genesis of `path` and the order value carrying it, with the policy-v31 module. */
 export function mint(path, { timestamp = 1_800_000_000_000, ...sizes } = {}) {
   const spec = chainSpec({ ...SIZES, ...sizes, moduleCIDs: [MODULE_CID] });
   return mintGenesis(buildChildGenesis, { spec, path, premineTo: null, modules: { [MODULE_CID]: MODULE }, parentStateCID: PARENT_STATE, timestamp });

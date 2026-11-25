@@ -1,13 +1,7 @@
-// Reading chains a node may not host: the specs above an ordered path come
-// from the home node when it serves the chain, else from the fastest node
-// the network declares for it (`/api/chain/endpoints`, through the SDK's
-// EndpointResolver). The web app and the seller read them the same way, so
-// both price an order the same.
+// Reading chains a node may not host: from the home node when it serves the
+// chain, else from the fastest node the network declares for it
+// (`/api/chain/endpoints`, through the SDK's EndpointResolver).
 import { reader } from "./market.mjs";
-import { pathFromNexus } from "./records.mjs";
-
-/** How long a spec read from a node other than the home one is kept. */
-export const REMOTE_SPEC_MS = 10 * 60_000;
 
 /** Nodes for `chainPath` that `entry`'s network declares: `[{ url, declaresSubmit }]`, none on failure. */
 export async function declaredNodes(sdk, entry, chainPath, fetchImpl = (...a) => fetch(...a)) {
@@ -39,35 +33,5 @@ export function chainReaders(sdk, home, { entry = home.node, fetchImpl: others =
     return found;
   }
 
-  /**
-   * A chain's spec, read from its tip by CID: the home node's kept once
-   * read; one read from another node (trusted, not checked) kept for at
-   * most REMOTE_SPEC_MS, then read again, through a node found again.
-   */
-  const specs = new Map();  // path → { read, until }
-  function specOf(chainPath) {
-    if (!(specs.get(chainPath)?.until > Date.now())) {
-      const entry = { until: Infinity };
-      entry.read = (async () => {
-        const own = await home.spec(chainPath);
-        if (own) return own;
-        if (readers.get(chainPath) !== home) readers.delete(chainPath);
-        entry.until = Date.now() + REMOTE_SPEC_MS;
-        return (await readerOf(chainPath)).spec(chainPath);
-      })();
-      specs.set(chainPath, entry);
-      const drop = () => { if (specs.get(chainPath) === entry) specs.delete(chainPath); };
-      entry.read.then((s) => { if (!s) drop(); }, drop);
-    }
-    return specs.get(chainPath).read.catch(() => undefined);
-  }
-
-  /** `Map(path → spec)` of every chain from Nexus down to each of `paths`, those that could be read. */
-  async function specsDownTo(paths) {
-    const all = [...new Set(paths.flatMap(pathFromNexus))];
-    const read = await Promise.all(all.map(specOf));
-    return new Map(all.map((p, i) => [p, read[i]]).filter(([, s]) => s));
-  }
-
-  return { readerOf, specOf, specsDownTo };
+  return { readerOf };
 }

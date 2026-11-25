@@ -5,8 +5,9 @@ import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { test } from "node:test";
 import * as sdk from "../vendor/lattice-sdk.js";
-import { moduleCID } from "../client/records.mjs";
-import { DEFAULT_MARKET, markClosing, markReopen, nodeVersion, sellerChains, sellerFiles, sponsorBooks, startsReopened, sweep, sweepReserve, syncProgress } from "../host/hearth.mjs";
+import { moduleCID, parseGenesis } from "../client/records.mjs";
+import { MARKET_POLICY, TESTNET_MARKET, marketMismatch } from "../client/market.mjs";
+import { DEFAULT_MARKET, unservedParents, markClosing, markReopen, nodeVersion, sellerChains, sellerFiles, sponsorBooks, startsReopened, sweep, sweepReserve, syncProgress } from "../host/hearth.mjs";
 import { miner } from "../host/pace.mjs";
 import { launch } from "../host/launch.mjs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -101,10 +102,22 @@ test("launch: pins every Volume and module of the genesis, then submits the gene
   await assert.rejects(launch({ rpc: rpc("tree"), path: "Nexus/testnet/app", genesis: { ...genesis, volumes: noBlock } }), /carries no block/);
 });
 
-test("the fragment lists the market and every owed chain, each with the chains above it, never Nexus", () => {
+test("the fragment lists the market, every owed chain and every parent it sells under, each with the chains above it, never Nexus", () => {
   assert.deepEqual(sellerChains({ market: DEFAULT_MARKET }), ["Nexus/testnet", DEFAULT_MARKET]);
   assert.deepEqual(sellerChains({ market: DEFAULT_MARKET, owed: ["Nexus/other/deep/app", "Nexus/b", "Nexus/testnet/a"] }),
     ["Nexus/b", "Nexus/other", "Nexus/testnet", "Nexus/other/deep", "Nexus/testnet/a", DEFAULT_MARKET, "Nexus/other/deep/app"], "any path, its ancestors first");
+  assert.deepEqual(sellerChains({ market: DEFAULT_MARKET, under: ["Nexus", "Nexus/x/y"] }), ["Nexus/testnet", "Nexus/x", DEFAULT_MARKET, "Nexus/x/y"], "the parents it sells under stay hosted");
+});
+
+test("the seller lists no parent its node does not serve", async () => {
+  const n = { api: async (route, path) => { if (route !== "/api/chain/info" || !["Nexus", "Nexus/testnet"].includes(path)) throw Object.assign(new Error("HTTP 404"), { status: 404 }); return {}; } };
+  assert.deepEqual(await unservedParents(n, ["Nexus", "Nexus/testnet"]), []);
+  assert.deepEqual(await unservedParents(n, ["Nexus", "Nexus/elsewhere", "Nexus/testnet/x"]), ["Nexus/elsewhere", "Nexus/testnet/x"]);
+  // Only the node's own answer that it does not host a chain counts: a failure to read leaves the offer as it is.
+  for (const failure of [Object.assign(new Error("HTTP 503"), { status: 503 }), new TypeError("fetch failed"), Object.assign(new Error("timeout"), { name: "TimeoutError" })]) {
+    const flaky = { api: async (route, path) => { if (path === "Nexus/testnet") throw failure; return {}; } };
+    await assert.rejects(unservedParents(flaky, ["Nexus", "Nexus/testnet"]), (e) => e === failure, failure.message);
+  }
 });
 
 test("the node gates: GET /config says which layer lists each chain (Lattice 4.0.1), and a chain counts as synced once its tip is at the best header its peers showed", async () => {
@@ -128,12 +141,42 @@ test("chain/spec.json names chain/policy.wasm by its own CID, the module the old
   assert.equal(JSON.parse(readFileSync(new URL("../chain/market.json", import.meta.url), "utf8")).moduleCID, cid);
 });
 
-test("the default market is the v3 market on testnet, whose spec names chain/policy-v3.wasm by its own CID", () => {
-  const market = JSON.parse(readFileSync(new URL("../chain/market-v3-testnet.json", import.meta.url), "utf8"));
-  const spec = JSON.parse(readFileSync(new URL("../chain/spec-v3-testnet.json", import.meta.url), "utf8"));
+test("the default market is the v3.1 market on testnet, whose spec names chain/policy-v31.wasm by its own CID", () => {
+  const market = JSON.parse(readFileSync(new URL("../chain/market-v31-testnet.json", import.meta.url), "utf8"));
+  const spec = JSON.parse(readFileSync(new URL("../chain/spec-v31-testnet.json", import.meta.url), "utf8"));
+  assert.deepEqual(TESTNET_MARKET, { path: market.path, genesis: market.genesis });
   assert.equal(market.path, DEFAULT_MARKET);
-  assert.equal(market.moduleCID, moduleCID(sdk, MODULE), "the market runs this build of policy/src");
+  assert.equal(market.moduleCID, MARKET_POLICY, "the market runs chain/policy-v31.wasm");
   assert.deepEqual(spec.wasmPolicies.map((p) => p.moduleCID), [market.moduleCID]);
+});
+
+test("the default market's genesis, as lattice-node minted it, is chain/spec-v31-testnet.json with chain/policy-v31.wasm", () => {
+  const minted = JSON.parse(readFileSync(new URL("./fixtures/genesis-testnet-hearth-v31.json", import.meta.url), "utf8"));
+  const spec = JSON.parse(readFileSync(new URL("../chain/spec-v31-testnet.json", import.meta.url), "utf8"));
+  const module = readFileSync(new URL("../chain/policy-v31.wasm", import.meta.url)).toString("base64");
+  const g = parseGenesis(sdk, { ...minted, modules: { [MARKET_POLICY]: module }, proofs: [] }, TESTNET_MARKET.path);
+  assert.equal(g.error, undefined);
+  assert.equal(g.cid, TESTNET_MARKET.genesis);
+  assert.equal(marketMismatch(g.spec, TESTNET_MARKET.path), undefined);
+  const plain = (v) => JSON.parse(JSON.stringify(v, (_, x) => (typeof x === "bigint" ? Number(x) : x)));
+  assert.deepEqual(plain(g.spec), spec);
+});
+
+test("this version refuses any market whose policy is not the v3.1 one: the v3 market, mainnet's, none", () => {
+  const spec = (name) => JSON.parse(readFileSync(new URL(`../chain/${name}`, import.meta.url), "utf8"));
+  assert.equal(marketMismatch(spec("spec-v31-testnet.json"), "Nexus/testnet/hearth-x"), undefined);
+  for (const [why, s] of [["v3", spec("spec-v3-testnet.json")], ["mainnet", spec("spec.json")], ["none", { ...spec("spec-v31-testnet.json"), wasmPolicies: [] }],
+    ["another beside it", { ...spec("spec-v31-testnet.json"), wasmPolicies: [...spec("spec-v31-testnet.json").wasmPolicies, ...spec("spec.json").wasmPolicies] }], ["unread", undefined]]) {
+    assert.match(marketMismatch(s, DEFAULT_MARKET), /does not run the v3\.1 market policy .* does nothing on it/, why);
+  }
+});
+
+test("chain/spec-v31-testnet.json, the v3.1 market's spec, names chain/policy-v31.wasm by its own CID", () => {
+  const spec = JSON.parse(readFileSync(new URL("../chain/spec-v31-testnet.json", import.meta.url), "utf8"));
+  const cid = moduleCID(sdk, readFileSync(new URL("../chain/policy-v31.wasm", import.meta.url)).toString("base64"));
+  assert.deepEqual(spec.wasmPolicies.map((p) => p.moduleCID), [cid]);
+  const v3 = JSON.parse(readFileSync(new URL("../chain/spec-v3-testnet.json", import.meta.url), "utf8"));
+  assert.deepEqual({ ...spec, wasmPolicies: [] }, { ...v3, wasmPolicies: [] }, "the v3 market's spec but for its policy");
 });
 
 test("`hearth earn` works for the sponsor's payouts until the address holds enough, waiting out 429s", async () => {

@@ -1,14 +1,17 @@
-// The market chain's records. The policy filters only their keys (who signs,
-// written once, the offer asserted, the host paid what the key says); what
-// the values say is read here, the same way by the host, the web app and the
-// tests.
+// The market chain's records. The policy filters their keys (who signs,
+// written once, the offer asserted, the host paid what the key says) and an
+// order's asserted offer (its parent and price); what the values say is read
+// here, the same way by the host, the web app and the tests.
 //
 //   offer/<host>/<id>                          the host's terms, edited in place
 //   order/<host>/<id>/<payer>/<n>/<paid>/<path>  the chain's genesis, or
 //                                                `renew <genesis CID>` to pay
 //                                                for more time on that genesis
 
-const ADDRESS = /^bafyrei[a-z2-7]{52}$/;
+// An account address in its one canonical spelling, as the policy's
+// `is_address`: base32 CIDv1 dag-cbor sha2-256, `bafyrei` then 52 characters,
+// the unused bits of the eighth (its top two, a-h) and the last (its low two) zero.
+const ADDRESS = /^bafyrei[a-h][a-z2-7]{50}[aeimquy4]$/;
 export const isAddress = (text) => typeof text === "string" && ADDRESS.test(text);
 
 /** A canonical unsigned decimal (no sign, no leading zero) as a BigInt, or undefined. */
@@ -51,57 +54,78 @@ export function parseOrderKey(key) {
 // ---- offers ----
 
 /**
- * An offer's lines, exactly these, in order, each a canonical decimal but
- * `blocks`:
+ * An offer's lines, exactly these, in order, each a canonical decimal up to
+ * 2^64 - 1 but `blocks` and `under`:
  *
  *   hashrate <n>     the host's mining power in hashes per second, merged
  *                    over every chain it hosts: each gets all of it. A
  *                    claim, not a price; readers measure what each chain
  *                    gets (client/mining.mjs).
- *   throughput <n>   coin per kB/s of block capacity (maxBlockSize ÷
- *                    targetBlockTime), per period
- *   storage <n>      coin per kB of maxStateGrowth, per period
+ *   price <n>        coin per period for one chain, at least 1
  *   period <n>       market blocks a period lasts, at least 1
+ *   throughput <n>   the largest block rate it takes, maxBlockSize ÷
+ *                    targetBlockTime, in bytes per second
+ *   storage <n>      the largest maxStateGrowth it takes, bytes per block
  *   blocks <address> where the host's blocks pay: how readers find its work
+ *   under <path>     a parent chain it sells under: one line each, at least
+ *                    one, sorted (by bytes), no two the same
  *
  * The host edits the record in place and deletes it to close the offer. An
- * order asserts it unchanged, so it lands only on the terms it priced.
+ * order asserts it unchanged, so it lands only on the terms it was priced
+ * at; the policy (policy/src/lib.rs) reads it the same way, and refuses an
+ * order whose path is not a child of an `under` path or that pays less than
+ * `price`.
  */
-export const OFFER_FIELDS = ["hashrate", "throughput", "storage", "period", "blocks"];
+export const OFFER_FIELDS = ["hashrate", "price", "period", "throughput", "storage", "blocks"];
 
-/** An offer's terms, or undefined when its text is not exactly its five lines. */
+const U64_MAX = (1n << 64n) - 1n;
+const utf8 = new TextEncoder();
+/** `a` before `b` by their UTF-8 bytes, as the policy orders `under` lines. */
+function bytesBefore(a, b) {
+  const x = utf8.encode(a), y = utf8.encode(b);
+  for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return x[i] < y[i];
+  return x.length < y.length;
+}
+
+/** An offer's terms (`under` a list of paths), or undefined when its text is not exactly its lines. */
 export function parseOffer(text) {
   if (typeof text !== "string") return undefined;
   const lines = text.split("\n");
-  if (lines.length !== OFFER_FIELDS.length) return undefined;
+  if (lines.length <= OFFER_FIELDS.length) return undefined;
   const offer = {};
   for (const [i, name] of OFFER_FIELDS.entries()) {
     const prefix = `${name} `;
     if (!lines[i].startsWith(prefix)) return undefined;
     const value = lines[i].slice(prefix.length);
     offer[name] = name === "blocks" ? (isAddress(value) ? value : undefined) : decimal(value);
-    if (offer[name] === undefined) return undefined;
+    if (offer[name] === undefined || (name !== "blocks" && offer[name] > U64_MAX)) return undefined;
   }
-  return offer.period > 0n ? offer : undefined;
+  offer.under = [];
+  for (const line of lines.slice(OFFER_FIELDS.length)) {
+    const path = line.startsWith("under ") ? line.slice(6) : undefined;
+    if (!isPath(path) || (offer.under.length && !bytesBefore(offer.under.at(-1), path))) return undefined;
+    offer.under.push(path);
+  }
+  return offer.price > 0n && offer.period > 0n ? offer : undefined;
 }
 
-/** An offer's value as stored. */
-export const formatOffer = (offer) => OFFER_FIELDS.map((name) => `${name} ${offer[name]}`).join("\n");
+/** An offer's value as stored: `under` sorted, each once. */
+export const formatOffer = (offer) => [...OFFER_FIELDS.map((name) => `${name} ${offer[name]}`),
+  ...[...new Set(offer.under)].sort((a, b) => (bytesBefore(a, b) ? -1 : 1)).map((path) => `under ${path}`)].join("\n");
 
-const ceilDiv = (a, b) => (a + b - 1n) / b;
-
-/** What one chain with `spec` costs per period at `offer`. */
-export const chainPrice = (offer, spec) =>
-  ceilDiv(offer.throughput * BigInt(spec.maxBlockSize), BigInt(spec.targetBlockTime)) + ceilDiv(offer.storage * BigInt(spec.maxStateGrowth), 1000n);
+/** Whether `offer` sells under `path`'s parent: the policy refuses an order elsewhere. */
+export const sellsUnder = (offer, path) => offer.under.includes(parentOf(path));
 
 /**
- * What one period of an order costs: every chain on its path, Nexus
- * included, by its own spec (`specs`, Nexus first, the ordered chain last),
- * at least 1.
+ * Why a chain with `spec` is too big for `offer`, or undefined: its block
+ * rate (maxBlockSize bytes each targetBlockTime ms) above `throughput`
+ * bytes a second, or its maxStateGrowth above `storage`. Compared in whole
+ * numbers, so nothing rounds.
  */
-export function pathPrice(offer, specs) {
-  const sum = specs.reduce((total, spec) => total + chainPrice(offer, spec), 0n);
-  return sum > 0n ? sum : 1n;
+export function overLimits(offer, spec) {
+  if (BigInt(spec.maxBlockSize) * 1000n > offer.throughput * BigInt(spec.targetBlockTime)) return "its spec's block rate (maxBlockSize ÷ targetBlockTime) is above the offer's throughput";
+  if (BigInt(spec.maxStateGrowth) > offer.storage) return "its spec's maxStateGrowth is above the offer's storage";
+  return undefined;
 }
 
 // ---- orders ----

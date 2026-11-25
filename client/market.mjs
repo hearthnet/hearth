@@ -4,6 +4,29 @@
 import { get, list, volumeLoader } from "./state.mjs";
 import { offerKey, parseOfferKey, parseOrderKey } from "./records.mjs";
 
+/**
+ * The testnet market the web app and `hearth` use unless told otherwise:
+ * its path and genesis: the v3.1 market (chain/market-v31-testnet.json),
+ * whose policy reads offers as client/records.mjs does.
+ */
+export const TESTNET_MARKET = { path: "Nexus/testnet/hearth-87e175", genesis: "bafyreibvqahfvcdtzv2qdhx5cmjwrsvryerfz7jpt47zdop2w5n3gi4aki" };
+
+/** The CID of chain/policy-v31.wasm: the market policy whose records this version reads and writes. */
+export const MARKET_POLICY = "bafyreiascfdu23qs7eesg7fhndhxfxp7l7mlode2jghenfsygxlgg724l4";
+
+/**
+ * Why this version must not work on the market `path` whose spec is `spec`
+ * (its policy not exactly MARKET_POLICY), or undefined. It reads another
+ * market's offers as unparseable and would judge every order there void.
+ */
+export function marketMismatch(spec, path) {
+  const cids = Array.isArray(spec?.wasmPolicies) ? spec.wasmPolicies.map((p) => p?.moduleCID) : [];
+  if (cids.length === 1 && cids[0] === MARKET_POLICY) return undefined;
+  return `${path} does not run the v3.1 market policy (${MARKET_POLICY}; it runs ${cids.join(", ") || "none"}): `
+    + "this version of Hearth reads only v3.1 offers and orders, and would judge every order there void, so it does nothing on it. "
+    + "Give --market (or ?market= and ?genesis=) a v3.1 market, or use the Hearth release made for this one.";
+}
+
 /** Where receipt state keeps a receipt: a domain-separated SHA-256 of its key, in hex. */
 export async function receiptStorageKey(key) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`lattice/receipt-state/v1\u0000${key}`));

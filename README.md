@@ -15,8 +15,17 @@ reward.
 There is no server. The market is a chain with a policy; the page reads it
 from any node that hosts it and checks every record against its CID.
 
-The v3 market runs on testnet at `Nexus/testnet/hearth`
-(`chain/market-v3-testnet.json`). The mainnet market `Nexus/hearth`
+This version reads and writes the v3.1 market's records: a buyer pays a
+flat price for the chain it orders alone, at a host that sells under that
+chain's parent. Its policy (`chain/policy-v31.wasm`) is fixed at genesis,
+so it runs on a new testnet market chain, `Nexus/testnet/hearth-87e175`
+(`chain/market-v31-testnet.json`), the default market (`TESTNET_MARKET` in
+`client/market.mjs`). The v3 market at `Nexus/testnet/hearth`
+(`chain/market-v3-testnet.json`) runs on, but this version does not read
+its offers. `hearth sell`, `stop` and `status` and
+the page read a market's spec first and refuse, saying so, any market whose
+policy is not exactly `chain/policy-v31.wasm` (`marketMismatch`), so this
+version never judges, unpins or writes on another. The mainnet market `Nexus/hearth`
 (`chain/market.json`) is the old one until it is launched again; this
 version of `hearth` does not sell on it.
 
@@ -29,7 +38,7 @@ blocks it makes pay its sponsor's key, 1,000 coin a market block.
 You need Node.js 22 or later, on macOS (Apple silicon) or Linux (x86-64):
 
 ```
-npx @hearthnet/hearth sell        # [--throughput 60] [--storage 6] [--period 1d] [--hashrate <hashes/s>] [--id 1]
+npx @hearthnet/hearth sell        # [--price 1000] [--period 1d] [--throughput 200000] [--storage 1000000] [--under <path>]... [--hashrate <hashes/s>] [--id 1]
 ```
 
 Hearth runs the node it sells from. The first time, it downloads a pinned
@@ -56,34 +65,41 @@ which layer lists each chain) and stops with "Hearth needs node 5.1.0 or
 newer (you have X: ...)" beside an older one, X as `GET /status` reports it. It makes the seller's key at
 `<root>/hearth/seller.json` (mode 0600; it prints the address, never the
 key, and refuses a key file others can read) unless there is one, has the
-node host the market (`Nexus/testnet/hearth` unless `--market` says, and
+node host the market (`Nexus/testnet/hearth-87e175` unless `--market` says, and
 the chains above it), then sells in the foreground. A bad flag, or a
 `--root` where no node lives ("no node at <root>"), stops it before it
 writes anything. Every verb takes `--help`.
 
-**The offer.** `offer/<seller>/<id>` (`--id`, default `1`) is five lines,
+**The offer.** `offer/<seller>/<id>` (`--id`, default `1`) is these lines,
 which the seller writes and changes in place:
 
 ```
 hashrate 5000000      hashes per second it mines with, over every chain it hosts
-throughput 60         coin per kB/s of block capacity (maxBlockSize / targetBlockTime), per period
-storage 6             coin per kB of maxStateGrowth, per period
+price 1000            coin per period for one chain
 period 1440           market blocks a period lasts
+throughput 200000     the largest block rate it takes: maxBlockSize / targetBlockTime, bytes a second
+storage 1000000       the largest maxStateGrowth it takes, bytes a block
 blocks bafyrei...     the address its blocks pay: its sponsor's key
+under Nexus/testnet   a parent it sells under: one line each, at least one, sorted, each once
 ```
 
-`--throughput` and `--storage` are whole market coin; `--period` is market
-blocks, or hours, days or weeks (`12h`, `1d`, `2w`) at the market's block
-time. The hash rate is `--hashrate`, else what its miner measured over its
-first minute: the offer waits for it. A buyer pays for every chain on its
-chain's path, Nexus included, each by its own spec: at the defaults a
-small chain (20 kB blocks every 30 s, 10 kB of state growth) costs 40 + 60
-= 100 a day itself, and its parents far more: under `Nexus/testnet` the
-whole path comes to about 25,000 a day. The seller rewrites the offer whenever the flags'
-terms or the address its blocks pay differ from what the market says (a
-measured hash rate is written once, not again as it wanders). An order
-asserts the offer's text unchanged, so an order priced at the old terms
-does not land after a change.
+`--price` is whole market coin, at least 1; `--period` is market blocks,
+or hours, days or weeks (`12h`, `1d`, `2w`) at the market's block time;
+`--throughput` is bytes a second and `--storage` bytes a block. The hash
+rate is `--hashrate`, else what its miner measured over its first minute:
+the offer waits for it. A buyer pays the price for the chain it orders
+alone, which must be a direct child of one of the offer's `under` chains:
+running every chain above it is the host's cost, recovered through its
+price. The offer sells under the market's parent (`Nexus/testnet` on the
+testnet market: test chains stay on testnet) and each `--under <path>`
+(repeat it). The seller keeps each of them hosted (in its fragment,
+below); the offer lists only those its node serves ("the node does not
+serve ..."), and is closed while it serves none. Leaving a parent out of `--under` stops new
+orders under it; chains already paid for stay owed. The seller rewrites
+the offer whenever the flags' terms or the address its blocks pay differ
+from what the market says (a measured hash rate is written once, not again
+as it wanders). An order asserts the offer's text unchanged, so an order
+priced at the old terms does not land after a change.
 
 **Funding.** The key needs market coin for its offer and its close (two
 fees). The miner pays the sponsor's key the blocks it makes, so beside the
@@ -98,8 +114,8 @@ out, it only says what to send, earn or sweep.
 
 **Orders.** Each pass, at the market's tip, the seller reads its orders and
 judges them as every reader does (`client/verdict.mjs`): an order is owed at
-once, from the block it landed in, for the periods it paid for, or void. A
-seller hosts any path: for each owed chain it lists the chain and every
+once, from the block it landed in, for the periods it paid for, or void.
+For each owed chain the seller lists the chain and every
 chain above it (but Nexus) in its fragment of the node's configuration
 (below), then launches the chain from the genesis the order carries
 (`host/launch.mjs`): it pins the genesis's Volumes and policy modules on the
@@ -177,10 +193,10 @@ agents on macOS (`~/Library/LaunchAgents/net.hearth.node.plist` and
 `net.hearth.seller.plist`; launchd has no ordering, so the seller waits for
 the node itself). The node is started again after a failure exit, which
 a restart is, but stays down after a clean stop and after exit 78
-(an invalid configuration; launchd cannot exempt one exit status, so the
-node's agent runs it under `/bin/sh`, which exits 0 for 78). The seller is
-started again after a failure, not after it exits 0 (when `hearth stop` has
-nothing paid left to serve). The units name no `network-online.target`,
+(an invalid configuration). The seller is started again after a failure,
+not after it exits 0 (when `hearth stop` has nothing paid left to serve)
+nor after exit 78 (a market it refuses). launchd cannot exempt one exit
+status, so both agents run under `/bin/sh`, which exits 0 for 78. The units name no `network-online.target`,
 which a user's service manager does not have. It loads nothing itself and prints the exact commands that do. On
 Linux they start with `loginctl enable-linger $USER`, which keeps them
 running without a login. A launch agent runs while you are logged in; for
@@ -304,12 +320,14 @@ nobody holds the payment in between, and there is no exchange to trust.
 Where a fee sponsor pays out the parent's coin, it can
 also be earned with the device's processor.
 
-**Records.** The policy (`policy/src/lib.rs`) filters only keys and coin;
-it never reads a record's value.
+**Records.** The policy (`policy/src/lib.rs`) filters keys and coin, and
+reads one value: the offer an order asserts. It refuses an order unless
+that offer parses (the lines above), the order's path is a direct child of
+one of its `under` chains, and `<paid>` is at least its `price`.
 
 | Key | Written by | Value (read off chain) |
 |---|---|---|
-| `offer/<host>/<id>` | the host: written, changed in place, deleted to close | the five lines above |
+| `offer/<host>/<id>` | the host: written, changed in place, deleted to close | the lines above |
 | `order/<host>/<id>/<payer>/<n>/<paid>/<path>` | the payer, once; pays the host `<paid>` and asserts the offer unchanged in the same transaction | the genesis as the buyer minted it (its CID, its Volumes and policy modules, and its child-only proofs), or `renew <genesis CID>` to pay for more time on that genesis |
 
 **Verdicts** (`client/verdict.mjs`, the same module in the host and the
@@ -319,34 +337,36 @@ block:
 - **void**: a path that is not under Nexus or is the market or a chain
   above it; a genesis that does not check out (its Volumes not exactly its
   own, a spec out of range, or proofs that do not prove this block at this
-  path); another genesis landing at that host (any of its offers) and path
-  while the genesis holding it there is still paid for; a renewal naming
-  another genesis than the one holding the path at that host when it
-  lands; or less than one period paid for the whole path (a renewal too);
-  an order that cannot be judged is void, never the rest;
-- **owed**: from the block it landed in, for `floor(paid / price)` periods,
-  the price summed over every chain on its path by each chain's spec;
-  renewals add time from where it ends.
-
-The specs above a path are read from the reader's node, else from the
-nodes it lists for the chain (`client/chains.mjs`), by the page and the
-seller alike. The prices of chains above a path that the seller's or the
-page's own node does not host are read from nodes the network lists, and
-trusted (read again every ten minutes).
+  path); a spec (the genesis's, or for a renewal the genesis it renews)
+  above the offer's `throughput` (`maxBlockSize × 1000 > throughput ×
+  targetBlockTime`, the block time in ms, so nothing rounds) or `storage`
+  (`maxStateGrowth > storage`); another genesis landing at that host (any
+  of its offers) and path while the genesis holding it there is still paid
+  for; a renewal naming another genesis than the one holding the path at
+  that host when it lands; an order that cannot be judged is void, never
+  the rest. The price and the parent need no verdict: the policy refused
+  any order wrong in either;
+- **owed**: from the block it landed in, for `floor(paid / price)` periods
+  of `period` market blocks; renewals add time from where it ends.
 
 The market records only what each seller is paid to run. Which genesis
 holds a path is the chains' to decide (its work), not the market's. A buyer
 may also commit the genesis to the parent chain to secure the name; the app
 does not build that commitment yet.
 
-`chain/spec-v3-testnet.json` and `chain/policy-v3.wasm` (this repo's build
-of `policy/src`) make the v3 market, the spec naming the module by its own
-CID; `chain/market-v3-testnet.json` holds its path, genesis and module CID.
+`chain/spec-v3-testnet.json` and `chain/policy-v3.wasm` make the v3
+market, the spec naming the module by its own CID;
+`chain/market-v3-testnet.json` holds its path, genesis and module CID.
+`chain/policy-v31.wasm` is this repo's build of `policy/src`, and
+`chain/spec-v31-testnet.json` the v3.1 market's spec naming it: the v3
+spec but for its policy, minted at `Nexus/testnet/hearth-87e175`;
+`chain/market-v31-testnet.json` holds its path, genesis and module CID,
+which `TESTNET_MARKET` names.
 
 **Hosts** run `host/sell-hosting.mjs` (what `hearth sell` runs) as a client
 of a node's operator API. Its own fragment of the node's configuration,
-`hostmarket` (`config.d/hostmarket.json`), lists the market and every chain
-it owes, with the chains above each, written with one
+`hostmarket` (`config.d/hostmarket.json`), lists the market, every chain
+it sells under and every chain it owes, with the chains above each, written with one
 `PUT /config/fragments/hostmarket` sent with the version it read. A lapsed
 chain is left out: the node stops it unless another layer (the operator's,
 the deploy's) lists it, and what it stored stays, but for the genesis pins
@@ -364,8 +384,8 @@ for it.
 Beside the node (loopback and its cookie):
 
 ```
-node host/sell-hosting.mjs --root /var/lib/lattice --market Nexus/testnet/hearth \
-  --key host.json [--throughput 60] [--storage 6] [--period 1d] [--hashrate <n>] --lattice /usr/local/bin/lattice \
+node host/sell-hosting.mjs --root /var/lib/lattice --market Nexus/testnet/hearth-87e175 \
+  --key host.json [--price 1000] [--period 1d] [--throughput 200000] [--storage 1000000] [--under <path>]... [--hashrate <n>] --lattice /usr/local/bin/lattice \
   [--sponsor-bin lattice-sponsor] [--sponsor-port 8650] [--sponsor-url https://host.example/sponsor] [--storage-rate 10240]
 ```
 
@@ -374,7 +394,7 @@ in its configuration) with a token made for it:
 
 ```
 node host/sell-hosting.mjs --node http://10.0.0.5:8090 --token-file seller.token \
-  --market Nexus/testnet/hearth --key host.json
+  --market Nexus/testnet/hearth-87e175 --key host.json
 ```
 
 Of the node's operator API, the seller uses `GET /config`,
@@ -400,9 +420,10 @@ host stores rather than relays; a record of past uptime.
 ## Tests
 
 ```
-cd policy && RUSTFLAGS="--remap-path-prefix=$HOME=/home --remap-path-prefix=$PWD=/hearth/policy" \
-  cargo build --release --target wasm32-unknown-unknown && node --test test/policy.test.mjs
-npm test                                                               # verdicts, hearth sell, the miner, launch, earn, burns, sell-coin
+cd policy && cargo test --lib && RUSTFLAGS="--remap-path-prefix=$HOME=/home --remap-path-prefix=$PWD=/hearth/policy" \
+  cargo build --release --target wasm32-unknown-unknown && cp target/wasm32-unknown-unknown/release/hostmarket_policy.wasm ../chain/policy-v31.wasm
+policy/check.sh                                                        # chain/policy-v31.wasm is this build of policy/src
+npm test                                                               # verdicts, hearth sell, the miner, launch, earn, burns, sell-coin, the committed policy module
 LATTICE=<lattice-node>/.build/debug/lattice SPONSOR=<lattice-sponsor>/.build/debug/lattice-sponsor \
   node test/e2e-seller.mjs                                             # hearth sell mines, writes its offer and sponsors; hearth stop
 ```

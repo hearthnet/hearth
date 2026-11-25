@@ -1,7 +1,21 @@
 // The one transaction that launches a chain at several hosts: an order at
 // each chosen offer, all naming the same path and carrying the same genesis.
 import { orderWrite, recordsBody } from "../client/tx.mjs";
-import { isRenewal, parseOffer } from "../client/records.mjs";
+import { isRenewal, overLimits, parseOffer } from "../client/records.mjs";
+
+/**
+ * The offers (`terms`, `<host>/<id>` → parsed offer) a chain with `spec`
+ * under `parent` can be ordered at: those selling under `parent` whose
+ * throughput and storage take `spec`; the market refuses an order at any
+ * other, or judges it void. `[{ k, host, id, offer, price, perBlock }]`,
+ * cheapest per market block first.
+ */
+export function offersFor({ terms, parent, spec }) {
+  return [...terms].filter(([, offer]) => offer.under.includes(parent) && !overLimits(offer, spec)).map(([k, offer]) => {
+    const [host, id] = k.split("/");
+    return { k, host, id, offer, price: offer.price, perBlock: Number(offer.price) / Number(offer.period) };
+  }).sort((a, b) => a.perBlock - b.perBlock || (a.k < b.k ? -1 : 1));
+}
 
 /**
  * The offers the buyer chose (`[{ k, host, id }]`, `k` `<host>/<id>`), each
@@ -50,15 +64,15 @@ export function launchCheck({ chosen, offers, orders, payer, path, name = (host)
 
 /**
  * The body ordering `path` at each chosen offer (at most one per host),
- * sorted by host, each `periods` periods priced over `specs` (every chain on
- * the path, Nexus first, the new chain last), carrying `value`. `nonce`, the
- * payer's market nonce, also tells its orders apart (`n`).
+ * sorted by host, each `periods` periods at the offer's price, carrying
+ * `value`. `nonce`, the payer's market nonce, also tells its orders apart
+ * (`n`).
  */
-export function launchBody({ chosen, payer, nonce, path, value, specs, periods, chainPath, fee }) {
+export function launchBody({ chosen, payer, nonce, path, value, periods, chainPath, fee }) {
   const hosts = chosen.map((c) => c.host);
   if (new Set(hosts).size !== hosts.length) throw new Error("one offer per host");
   const written = [...chosen].sort((a, b) => (a.host < b.host ? -1 : 1))
-    .map(({ host, id, terms }) => orderWrite({ host, id, terms, payer, n: nonce, path, value, specs, periods }));
+    .map(({ host, id, terms }) => orderWrite({ host, id, terms, payer, n: nonce, path, value, periods }));
   return {
     keys: written.map((w) => w.actions[1].key),
     paid: written.reduce((sum, w) => sum + w.paid, 0n),
@@ -72,9 +86,9 @@ export function launchBody({ chosen, payer, nonce, path, value, specs, periods, 
  * then shows as an order (refused by `launchCheck`) while the nonce is the
  * one it used, so a second payment is never signed with a fresh nonce.
  */
-export async function launchAttempt({ reader, market, chosen, payer, path, value, specs, periods, chainPath, fee, name }) {
+export async function launchAttempt({ reader, market, chosen, payer, path, value, periods, chainPath, fee, name }) {
   const { nonce } = await reader.account(market, payer);
   const latest = await reader.market(market);
   launchCheck({ chosen, offers: latest.offers, orders: latest.orders, payer, path, name });
-  return launchBody({ chosen, payer, nonce, path, value, specs, periods, chainPath, fee: await fee() });
+  return launchBody({ chosen, payer, nonce, path, value, periods, chainPath, fee: await fee() });
 }
