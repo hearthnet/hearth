@@ -113,6 +113,11 @@ test("the seller lists no parent its node does not serve", async () => {
   const n = { api: async (route, path) => { if (route !== "/api/chain/info" || !["Nexus", "Nexus/testnet"].includes(path)) throw Object.assign(new Error("HTTP 404"), { status: 404 }); return {}; } };
   assert.deepEqual(await unservedParents(n, ["Nexus", "Nexus/testnet"]), []);
   assert.deepEqual(await unservedParents(n, ["Nexus", "Nexus/elsewhere", "Nexus/testnet/x"]), ["Nexus/elsewhere", "Nexus/testnet/x"]);
+  // Only the node's own answer that it does not host a chain counts: a failure to read leaves the offer as it is.
+  for (const failure of [Object.assign(new Error("HTTP 503"), { status: 503 }), new TypeError("fetch failed"), Object.assign(new Error("timeout"), { name: "TimeoutError" })]) {
+    const flaky = { api: async (route, path) => { if (path === "Nexus/testnet") throw failure; return {}; } };
+    await assert.rejects(unservedParents(flaky, ["Nexus", "Nexus/testnet"]), (e) => e === failure, failure.message);
+  }
 });
 
 test("the node gates: GET /config says which layer lists each chain (Lattice 4.0.1), and a chain counts as synced once its tip is at the best header its peers showed", async () => {

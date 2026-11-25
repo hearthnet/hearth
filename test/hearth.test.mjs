@@ -12,6 +12,8 @@ import * as sdk from "../vendor/lattice-sdk.js";
 import { keyFileJSON } from "../client/tx.mjs";
 import { DEFAULT_MARKET, DEFAULT_TERMS, ensureKey, fundingMessage, fundingStep, offerTerms, parseSize, periodBlocks, serviceUnits } from "../host/hearth.mjs";
 import { earnings, report } from "../host/status.mjs";
+import { parseOrderValue } from "../client/records.mjs";
+import { mint, respec } from "./minted.mjs";
 
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), "../bin/hearth.mjs");
@@ -116,6 +118,7 @@ test("--install writes units for the node and the seller, the seller after the n
   assert.match(seller, /^After=hearth-node.service$/m);
   assert.match(seller, /^Requires=hearth-node.service$/m);
   assert.match(seller, /^Restart=on-failure$/m, "not after it exits 0: `hearth stop`, once nothing paid is left");
+  assert.match(seller, /^RestartPreventExitStatus=78$/m, "nor after 78: a market it refuses");
   for (const unit of [node, seller]) assert.doesNotMatch(unit, /network-online/, "a user manager has no network-online.target");
   for (const unit of [node, seller]) assert.match(unit, /^WantedBy=default.target$/m);
   assert.equal(linux.load, "loginctl enable-linger $USER && systemctl --user daemon-reload && systemctl --user enable --now hearth-node.service hearth.service");
@@ -146,9 +149,11 @@ test("--install writes units for the node and the seller, the seller after the n
  * fresh node, which reads no market yet. `version` is what its status
  * reports; `old`: a node before 4.0.1, whose `GET /config` does not say
  * which layer lists each chain; `chains` maps a chain path to its status
- * (absent: not hosted).
+ * (absent: not hosted). With `market` (an order value carrying a genesis)
+ * the market's tip is that genesis, its Volumes served: its spec is read.
  */
-async function freshNode({ version = "5.1.0+dev", old = false, chains = {}, balance } = {}) {
+async function freshNode({ version = "5.1.0+dev", old = false, chains = {}, balance, market } = {}) {
+  const genesis = market && parseOrderValue(market);
   const puts = [], posted = [];
   let fragment;
   const server = createServer((req, res) => {
@@ -160,6 +165,10 @@ async function freshNode({ version = "5.1.0+dev", old = false, chains = {}, bala
       // With `balance`, each account on the market holds `balance(address)`.
       if (balance && url.pathname.startsWith("/api/state/account/")) { res.writeHead(200).end(JSON.stringify({ balance: String(balance(url.pathname.split("/").at(-1))), nonce: "0" })); return; }
       if (balance && url.pathname === "/api/chain/info") { res.writeHead(200).end(JSON.stringify({ minRelayFee: 1 })); return; }
+      if (genesis && url.pathname === "/api/block/latest" && url.searchParams.get("chainPath") === DEFAULT_MARKET) { res.writeHead(200).end(JSON.stringify({ hash: genesis.genesis, height: "0" })); return; }
+      if (genesis && url.pathname.startsWith("/volumes/") && genesis.volumes[url.pathname.slice(9)]) {
+        res.writeHead(200, { "Content-Type": sdk.VOLUME_ARCHIVE_MEDIA_TYPE }).end(Buffer.from(genesis.volumes[url.pathname.slice(9)], "base64")); return;
+      }
       if (url.pathname === "/transactions") { posted.push(JSON.parse(body)); res.writeHead(200).end("{}"); return; }
       if (url.pathname === "/status") {
         const path = url.searchParams.get("chainPath");
@@ -259,9 +268,23 @@ async function sellUntilSponsor(node, more = []) {
 }
 
 const SYNCED = { [DEFAULT_MARKET]: { phase: "active", height: "5", bestHeaderHeight: "5" } };
+/** A v3.1 market's genesis (chain/policy-v31.wasm), and one running the v3 policy. */
+const V31_MARKET = mint(DEFAULT_MARKET).value;
+const V3_MARKET = respec(V31_MARKET, JSON.parse(readFileSync(new URL("../chain/spec-v3-testnet.json", import.meta.url), "utf8")));
+
+test("`hearth sell` on a market that does not run the v3.1 policy stops, exit 78, before it mines, sponsors or writes", async () => {
+  const node = await freshNode({ chains: SYNCED, balance: () => 1000n, market: V3_MARKET });
+  try {
+    const { code, out } = await hearth(["sell", "--root", node.root, "--lattice", node.lattice, "--sponsor-bin", node.sponsor, "--interval", "1"]);
+    assert.equal(code, 78, out);
+    assert.match(out, /does not run the v3\.1 market policy/);
+    assert.equal(existsSync(node.sponsorRan), false, "no sponsor started");
+    assert.deepEqual(node.posted, [], "nothing written");
+  } finally { node.close(); }
+});
 
 test("`hearth sell` runs lattice-sponsor beside the node with a key of its own, on loopback without --sponsor-url, and stops it with itself", async () => {
-  const node = await freshNode({ chains: SYNCED, balance: () => 1000n });
+  const node = await freshNode({ chains: SYNCED, balance: () => 1000n, market: V31_MARKET });
   try {
     const { out, ran, sponsorAlive, pidLeft } = await sellUntilSponsor(node);
     const sponsorKey = join(node.root, "hearth/sponsor.json");
@@ -350,7 +373,7 @@ test("a `lattice` that prints no JSON fails the pass, which is logged, not the p
 });
 
 test("an unfunded seller starts no lattice-sponsor: the sponsor's key is its own to move the first fees from", async () => {
-  const node = await freshNode({ chains: SYNCED, balance: () => 0n });
+  const node = await freshNode({ chains: SYNCED, balance: () => 0n, market: V31_MARKET });
   try {
     const child = spawn(process.execPath, [BIN, "sell", "--root", node.root, "--lattice", node.lattice, "--sponsor-bin", node.sponsor, "--interval", "1"]);
     let out = "";

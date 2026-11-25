@@ -359,6 +359,12 @@ if (verb === "stop") {
     const { root, key, node, fetchImpl } = await located();
     const privateKey = readKey(key);
     await nodeVersion(node, fetchImpl);
+    // Before anything is stopped or marked: never on a market this version cannot read.
+    const r = reader(sdk, node, { fetchImpl });
+    let spec = await r.spec(a.market);
+    if (!spec) { await waitSynced(node, a.market, { fetchImpl, label: "market" }); spec = await r.spec(a.market); }
+    const wrong = marketMismatch(spec, a.market);
+    if (wrong) fail(wrong);
     const files = sellerFiles({ root, key });
     let pid = runningSeller(files.pid);
     if (a.now) {

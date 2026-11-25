@@ -423,6 +423,7 @@ host stores rather than relays; a record of past uptime.
 ```
 cd policy && cargo test --lib && RUSTFLAGS="--remap-path-prefix=$HOME=/home --remap-path-prefix=$PWD=/hearth/policy" \
   cargo build --release --target wasm32-unknown-unknown && cp target/wasm32-unknown-unknown/release/hostmarket_policy.wasm ../chain/policy-v31.wasm
+policy/check.sh                                                        # chain/policy-v31.wasm is this build of policy/src
 npm test                                                               # verdicts, hearth sell, the miner, launch, earn, burns, sell-coin, the committed policy module
 LATTICE=<lattice-node>/.build/debug/lattice SPONSOR=<lattice-sponsor>/.build/debug/lattice-sponsor \
   node test/e2e-seller.mjs                                             # hearth sell mines, writes its offer and sponsors; hearth stop

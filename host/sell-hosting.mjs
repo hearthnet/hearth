@@ -313,6 +313,15 @@ async function pass() {
     return;
   }
   syncLine = undefined;
+  // Nothing is mined, sponsored, judged, funded, unpinned or written on a
+  // market this version cannot read: it stops, exit 78 (a configuration error).
+  if (!marketRuns) {
+    const spec = await node().spec(marketPath);
+    if (!spec) throw Object.assign(new Error(`waiting for the node to host ${marketPath}`), { waiting: true });
+    const wrong = marketMismatch(spec, marketPath);
+    if (wrong) throw Object.assign(new Error(wrong), { refused: true });
+    marketRuns = true;
+  }
   if (!mine && !args.once) {
     mine = miner({ rpc: rpcURL(), fetchImpl: authed, to: sponsorAddress, log });
     const was = mine;
@@ -326,12 +335,6 @@ async function pass() {
   const m = await n.market(marketPath).catch((e) => {
     throw e.status === 404 ? Object.assign(new Error(`waiting for the node to host ${marketPath}`), { waiting: true }) : e;
   });
-  // Nothing is judged, funded, unpinned or written on a market this version cannot read.
-  if (!marketRuns) {
-    const wrong = marketMismatch(await n.spec(marketPath), marketPath);
-    if (wrong) throw Object.assign(new Error(wrong), { refused: true });
-    marketRuns = true;
-  }
   const open = [...m.offers.keys()].filter((k) => k.startsWith(`${self}/`));
   if (!ready) {
     // Its first write waits for its fee (`fund`); once its offer is out,
@@ -382,7 +385,8 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => {
 log(`selling hosting on ${marketPath} as ${self}`);
 for (;;) {
   try { await pass(); } catch (e) {
-    if (e.tooOld || e.refused) { console.error(`hearth: ${e.message}`); quit(2); }
+    if (e.tooOld) { console.error(`hearth: ${e.message}`); quit(2); }
+    if (e.refused) { console.error(`hearth: ${e.message}`); quit(78); }
     log(...(e.waiting ? [e.message] : ["pass failed:", e.message]));
   }
   if (args.once) break;

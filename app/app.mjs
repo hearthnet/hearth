@@ -157,13 +157,16 @@ function renderChip() {
 }
 
 // ---- the market, judged ----
-let market = null, verdicts = new Map(), loading = null, policyRead;
+let market = null, verdicts = new Map(), loading = null, policyRuns = false;
 async function loadMarket(force = false) {
   if (!force && market && Date.now() - market.at < 15_000) return market;
   loading ??= (async () => {
     // This page reads only v3.1 offers and orders: on any other market it would judge every order void.
-    const wrong = marketMismatch(await (policyRead ??= r.spec(cfg.market).catch((e) => { policyRead = undefined; throw e; })), cfg.market);
-    if (wrong) throw new Error(wrong);
+    if (!policyRuns) {
+      const wrong = marketMismatch(await r.spec(cfg.market), cfg.market);
+      if (wrong) throw new Error(wrong);
+      policyRuns = true;   // kept only once read and right: a failed read is tried again
+    }
     const m = await r.market(cfg.market);
     m.at = Date.now();
     // Each offer's terms now: what an order placed now asserts and pays at.

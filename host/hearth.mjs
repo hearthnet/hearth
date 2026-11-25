@@ -50,11 +50,14 @@ export const sellerChains = ({ market, owed = [], under = [] }) => ordered([mark
 
 /**
  * Of the parents an offer sells under (`under`), those the node `n` (a
- * `reader`) does not serve: the seller writes no offer while there is one.
+ * `reader`) says it does not host (404): the offer leaves them out. Any
+ * other failure throws, so a passing error never changes the offer.
  */
 export async function unservedParents(n, under) {
   const missing = [];
-  for (const path of under) await n.api("/api/chain/info", path).catch(() => missing.push(path));
+  for (const path of under) {
+    await n.api("/api/chain/info", path).catch((e) => { if (e.status !== 404) throw e; missing.push(path); });
+  }
   return missing;
 }
 
@@ -413,6 +416,7 @@ Requires=hearth-node.service` : ""}
 ExecStart=${command.map(systemdWord).join(" ")}
 Environment=${systemdWord(`PATH=${path}`)}
 Restart=on-failure
+RestartPreventExitStatus=78
 RestartSec=30
 
 [Install]
